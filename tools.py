@@ -1,13 +1,14 @@
-def read_fasta(fpath):
+import re
+
+def read_fastalines(lines):
     """Returns a hash: key = taxon name, value = sequence from the fasta file.
         Ignores redundant taxa."""
-    fin = open(fpath, "r")    
     taxanames = []
     taxa_seq = {}
     last_taxa = None
     last_seq = ""
     okay = True
-    for l in fin.xreadlines():
+    for l in lines:
         l = l.strip()
         if l.__len__() <= 2:
             pass
@@ -27,6 +28,17 @@ def read_fasta(fpath):
     if last_taxa != None:
         taxa_seq[last_taxa] = last_seq
     
-    fin.close()
-    
     return taxa_seq
+
+def read_fasta(fpath):
+    """Returns a hash: key = taxon name, value = sequence from the fasta file.
+        Ignores redundant taxa."""
+    fin = open(fpath, "r")    
+    taxanames = []
+    taxa_seq = {}
+    last_taxa = None
+    last_seq = ""
+    okay = True
+    lines = fin.readlines()
+    fin.close()
+    return read_fastalines( lines )
