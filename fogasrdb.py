@@ -20,8 +20,10 @@ def build_db(dbpath = None):
     cur.execute("create table if not exists seqnames(id integer primary key autoincrement, speciesid INTEGER, name TEXT)")
     cur.execute("create table if not exists ntseqs(id INTEGER primary key autoincrement, speciesid INT, sequence TEXT, seqid INT)")
     cur.execute("create table if not exists aaseqs(id INTEGER primary key autoincrement, speciesid INT, sequence TEXT, seqid INT)")
+    cur.execute("create table if not exists nt_aa_check(seqid INTEGER, checkval INT)") # do the nt and aa sequences correspond? If so, then check == 1
     cur.execute("create table if not exists orthogroups(id INTEGER primary key autoincrement, name TEXT unique)")
     cur.execute("create table if not exists group_seq(groupid INTEGER, seqid INTEGER)")
+    cur.execute("create table if not exists wgd_groups(groupid INTEGER, depth INTEGER)") # which orthogroups are useful for stuyding the whole genome duplication?
     con.commit()
     return con
     

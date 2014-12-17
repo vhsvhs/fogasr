@@ -4,6 +4,8 @@ from tools import *
 """ MAIN """
 con = build_db("fogasr.db")
 cur = con.cursor()
-import_sequences(con)
-verify_sequences(con)
-import_orthogroups(con)
+#import_sequences(con)
+#verify_sequences(con)
+#import_orthogroups(con)
+#filter_orthogroups(con)
+setup_all_asr(con)
