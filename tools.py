@@ -219,7 +219,6 @@ def import_sequences(con):
             sql = "insert into nt_aa_check (seqid, checkval) values(" + seqid.__str__() + "," + check.__str__() + ")"
             cur.execute(sql) 
             
-            
             sql = "select id from seqnames where speciesid=" + speciesid.__str__() + " and name='" + t + "'"
             cur.execute(sql)
             seqid = cur.fetchone()[0]
@@ -475,6 +474,8 @@ def filter_orthogroups(con):
     count = cur.fetchone()[0]
     write_log(con, "I found " + count.__str__() + " orthogroups that are useful for studying the whole-genome duplication.")
 
+
+
 def setup_all_asr(con):
     cur = con.cursor()
     sql = "select groupid from wgd_groups"
@@ -529,7 +530,7 @@ def get_postdup_anc_string(con, orthogroupid):
     return get_group_string(con, orthogroupid, names)
 
 def get_group_string(con, orthogroupid, names):
-    """A helper method."""
+    """A helper method for 'get_postdup_anc_string', 'get_predup_anc_string', and 'get_outgroup_string'"""
     cur = con.cursor()
     """Get a list of species IDs for Scer clade species."""
     sql = "select id from species where name="
@@ -542,8 +543,11 @@ def get_group_string(con, orthogroupid, names):
     for ii in x:
         ids.append( ii[0] )
 
+# sql = "select seqid from group_seq where groupid=" + orthogroupid.__str__() + " and seqid in (select seqid from nt_aa_check where checkval>0)"
+
     """Get the seqids for this orthogroup"""        
-    sql = "select seqid from group_seq where groupid=" + orthogroupid.__str__()
+    sql = "select seqid from group_seq where groupid=" + orthogroupid.__str__() + " and seqid in (select seqid from nt_aa_check where checkval>0)"
+    #sql = "select seqid from group_seq where groupid=" + orthogroupid.__str__()
     cur.execute(sql)
     items = []
     x = cur.fetchall()
@@ -605,9 +609,9 @@ def setup_asr_analysis(con, orthogroupid):
     
     fout.write("RAXML = raxml -T 2\n")
     fout.write("PHYML = phyml\n")
-    fout.write("LAZARUS = python /common/lazarus/lazarus.py\n") 
-    fout.write("MARKOV_MODEL_FOLDER = /common/lazarus/paml/dat/\n")
-    fout.write("ANCCOMP = python ~/Documents/SourceCode/anccomp/compare_ancs.py\n")
+    fout.write("LAZARUS = python /common/REPOSITORY/lazarus/lazarus.py\n") 
+    fout.write("MARKOV_MODEL_FOLDER = /common/REPOSITORY/paml44/dat\n")
+    fout.write("ANCCOMP = python /Network/Servers/udp015817uds.ucsf.edu/Users/victor/Documents/EclipseWork/anccomp/compare_ancs.py\n")
     
     fout.write("FASTTREE = FastTree\n")
     
@@ -619,14 +623,14 @@ def setup_asr_analysis(con, orthogroupid):
     fout.write("RUN = sh\n")
     
     # In what directories should I expect to find multiple sequence alignments? 
-    fout.write("ALIGNMENT_ALGORITHMS = muscle mafft\n")
+    fout.write("ALIGNMENT_ALGORITHMS = mafft\n")
     
     fout.write("MSAPROBS = msaprobs\n")
     fout.write("MUSCLE = muscle\n")
     fout.write("MAFFT = mafft\n")
     fout.write("ZORRO = zorro\n")
     
-    fout.write("MODELS_RAXML = PROTGAMMALG PROTGAMMAWAG PROTCATLG PROTCATWAG\n")
+    fout.write("MODELS_RAXML = PROTGAMMALG PROTCATLG \n")
     
     fout.write("SEED_MOTIF_TAXA = " + project_name + "\n")
     
@@ -646,4 +650,28 @@ def setup_asr_analysis(con, orthogroupid):
     
     fout.write("COMPARE AncPredup AncPostdup\n")
     
+    fout.close()
+    
+def write_asr_scripts(con):
+    cur = con.cursor()
+    sql = "select groupid from wgd_groups"
+    cur.execute(sql)
+    x = cur.fetchall()
+    commands = []
+    
+    for ii in x:
+        datadir = "data/" + ii[0].__str__()
+        if os.path.exists(datadir):  
+            fout = open(datadir + "/runme.sh", "w")
+            fout.write("cd " + os.path.abspath(datadir) + "\n" )
+            fout.write("python ~/EclipseWork/asrpipelinev2/runme.py --configpath " + ii[0].__str__()  + ".config --skip_zorro\n")
+            fout.write("cd -")
+            fout.close()
+            commands.append("source " + datadir + "/runme.sh")
+        else:
+            write_error(con, "I cannot find the data directory for orthogroup " + ii[0] + " at " + datadir)
+    
+    fout = open("asr_commands.sh", "w")
+    for c in commands:
+        fout.write(c + "\n")
     fout.close()
