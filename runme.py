@@ -12,9 +12,9 @@ cur = con.cursor()
 #check_again_wgdgroups(con)
 
 #setup_all_asr(con)
-write_asr_scripts(con)
+#write_asr_scripts(con)
 
-import os
-os.system("mpirun -np 3 /common/bin/mpi_dispatch asr_commands.sh")
+#import os
+#os.system("mpirun -np 3 /common/bin/mpi_dispatch asr_commands.sh")
 
 validate_asr_output(con)

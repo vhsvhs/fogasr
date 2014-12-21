@@ -652,6 +652,7 @@ def setup_asr_analysis(con, orthogroupid):
     fout.write("MUSCLE = muscle\n")
     fout.write("MAFFT = mafft\n")
     fout.write("ZORRO = zorro\n")
+    fout.write("CODEML = codeml\n")
     
     fout.write("MODELS_RAXML = PROTGAMMALG PROTCATLG \n")
     
@@ -838,6 +839,6 @@ def check_again_wgdgroups(con):
             sys.stdout.flush()
             
         
-        
+
         
         
