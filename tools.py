@@ -205,7 +205,7 @@ def import_sequences(con):
                 --> we'll import regardless of the answer, but we'll remember which sequences are good."""
             codoncheck = check_nt_vs_aa(con, taxa_aaseq[t], this_seq)
             check = 0
-            if codoncheck != None:
+            if codoncheck:
                 check = 1
             else:
                 from Bio.Seq import Seq
@@ -225,8 +225,9 @@ def import_sequences(con):
             
             sql = "insert into ntseqs (speciesid, sequence, seqid) values("
             sql += speciesid.__str__() + ",'" + this_seq + "'," + seqid.__str__() + ")"
-            cur.execute(sql)            
-        con.commit()
+            cur.execute(sql)
+            con.commit()            
+        #con.commit()
         print ""
         
         """Ensure all the aa sequences have a companion nt sequence."""        
@@ -288,10 +289,7 @@ def check_nt_vs_aa(con, aaseq, codonseq):
     
     if float( aa_no_indels.__len__() ) != float(nt_no_indels.__len__())/3.0:
         print aa_no_indels.__len__().__str__(), " versus ", nt_no_indels.__len__().__str__()
-        
-        return None
-        
-    
+        return False
     return True     
 
 def import_orthogroups(con):
@@ -482,9 +480,13 @@ def setup_all_asr(con):
     cur.execute(sql)
     x = cur.fetchall()
     os.system("mkdir data")
-    for ii in x:
+    #for ii in x:
+    write_log(con, "Restricting the analysis to the first 30 orthogroups only. Checkpoint 486.")    
+    for cc in range(0, 30):
+        ii = x[cc] 
         print "\n. Building ASR working folder for " + ii[0].__str__()
         setup_asr_analysis(con, ii[0])
+        validate_asr_setup(con, ii[0])
 
 def get_gene_family_name(con, orthogroupid):
     cur = con.cursor()
@@ -574,6 +576,27 @@ def setup_asr_analysis(con, orthogroupid):
     for ii in x:
         seqids.append( ii[0] )
 
+    """Now check that all the amino acid and codon sequences match."""
+    ntseqs = {}
+    aaseqs = {}
+    for seqid in seqids:
+        sql = "select sequence from ntseqs where seqid=" + seqid.__str__()
+        cur.execute(sql)
+        ntsequence = cur.fetchone()[0]
+        sql = "select sequence from aaseqs where seqid=" + seqid.__str__()
+        cur.execute(sql)
+        aasequence = cur.fetchone()[0]
+        name = get_seqname(con, seqid)
+        ntseqs[name] = ntsequence
+        aaseqs[name] = aasequence
+        
+    bad_taxa = []
+    for taxon in aaseqs:
+        check = check_nt_vs_aa(con, aaseqs[taxon], ntseqs[taxon])
+        if check == False:
+            bad_taxa.append( taxon )
+
+
     os.system("mkdir data/" + orthogroupid.__str__())
 
     """Write nt FASTA"""
@@ -652,17 +675,67 @@ def setup_asr_analysis(con, orthogroupid):
     
     fout.close()
     
+def validate_asr_setup(con, orthogroupid):
+    """This method validates the results of the method 'setup_asr_analysis'.
+    If everything is OK, this method returns with no errors.
+    If something is wrong, it exits the program."""
+    cur = con.cursor()
+
+    asrdir = "data/" + orthogroupid.__str__()
+    if False == os.path.exists(  asrdir  ):
+        write_error(con, "I cannot find the ASR working directory " + asrdir)
+        exit()
+
+    ntfasta = "data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".nt.fasta"
+    if False == os.path.exists(  ntfasta  ):
+        write_error(con, "I cannot find the NT fasta file" + ntfasta)
+        exit()
+    
+    aafasta = "data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".aa.fasta"
+    if False == os.path.exists(  aafasta  ):
+        write_error(con, "I cannot find the AA fasta file" + aafasta)
+        exit()
+    
+    configpath = "data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".config"
+    if False == os.path.exists(  configpath  ):
+        write_error(con, "I cannot find the configuration file " + configpath)
+        exit()
+    
+    """Now check that all the amino acid and codon sequences match."""
+    ntseqs = read_fasta(ntfasta)
+    aaseqs = read_fasta(aafasta)
+    for taxon in ntseqs:
+        if taxon not in aaseqs:
+            write_error(con, "I cannot find taxon " + taxon + " in " + aafasta)
+            exit()
+    for taxon in aaseqs:
+        if taxon not in ntseqs:
+            write_error(con, "I cannot find taxon " + taxon + " in " + ntfasta)
+            exit()
+    for taxon in ntseqs:
+        check = check_nt_vs_aa(con, aaseqs[taxon], ntseqs[taxon])
+        if check == False:
+            write_error(con, "The a.a. and n.t. sequences for taxon " + taxon + " do not match. Orthogroup ID " + orthogroupid.__str__())
+            exit()   
+    
+      
 def write_asr_scripts(con):
     cur = con.cursor()
     sql = "select groupid from wgd_groups"
     cur.execute(sql)
     x = cur.fetchall()
     commands = []
-    
-    for ii in x:
+
+    #for ii in x:
+    write_log(con, "Restricting the analysis to the first 100 orthogroups only. Checkpoint 663.")    
+    for cc in range(0, 30):
+        ii = x[cc] 
+
         datadir = "data/" + ii[0].__str__()
-        if os.path.exists(datadir):  
-            fout = open(datadir + "/runme.sh", "w")
+        scriptpath = datadir + "/runme.sh"
+
+        if os.path.exists(datadir):              
+            fout = open(scriptpath, "w")
             fout.write("cd " + os.path.abspath(datadir) + "\n" )
             fout.write("python ~/EclipseWork/asrpipelinev2/runme.py --configpath " + ii[0].__str__()  + ".config --skip_zorro\n")
             fout.write("cd -")
@@ -670,8 +743,101 @@ def write_asr_scripts(con):
             commands.append("source " + datadir + "/runme.sh")
         else:
             write_error(con, "I cannot find the data directory for orthogroup " + ii[0] + " at " + datadir)
+            exit()
+            
+        if False == os.path.exists(scriptpath):
+            write_error(con, "I was unable to write the ASR script " + scriptpath)
+            exit()
     
     fout = open("asr_commands.sh", "w")
     for c in commands:
         fout.write(c + "\n")
     fout.close()
+    
+    
+    
+def validate_asr_output(con):
+    cur = con.cursor()
+    sql = "select groupid from wgd_groups"
+    cur.execute(sql)
+    x = cur.fetchall()
+    
+    """ NOTE: we're restricting the analysis to the first 100 orthogroups only."""
+    for cc in range(0, 30):
+        ii = x[cc]  
+        datadir = "data/" + ii[0].__str__()
+        
+        """Look for the dN/dS vs. Df comparison"""
+        comppath = datadir + "/compare_dnds_Df.txt"
+        
+        if False == os.path.exists(comppath):
+            write_error(con, "I cannot find the dnds-vs.-df comparisons for orthogroup ID " + ii[0].__str__() )
+        else:
+            write_log(con, "OK. I found the dnds-vs.-df comparisons for orthogroup ID " + ii[0].__str__() )
+            fin = open(comppath, "r")
+            count = 0
+            for l in fin.xreadlines():
+                if l.__len__() > 1:
+                    count += 1
+            fin.close()
+            print "\n. . . " + count.__str__() + " sites."
+
+def check_again_wgdgroups(con):
+    cur = con.cursor()
+    groupids = []
+    sql = "select groupid from wgd_groups"
+    cur.execute(sql)
+    x = cur.fetchall()
+    for ii in x:
+        groupids.append( ii[0] )
+    
+    countgroups = 0
+    totalgroups = groupids.__len__()
+    for orthogroupid in groupids:
+        """Get a list of sequence IDs that are in this orthogroup, AND which can be validated across their aa and nt sequences."""
+        sql = "select seqid from group_seq where groupid=" + orthogroupid.__str__() + " and seqid in (select seqid from nt_aa_check where checkval>0)"
+        cur.execute(sql)
+        x = cur.fetchall()
+        seqids = []
+        for ii in x:
+            seqids.append( ii[0] )
+    
+        """Now check that all the amino acid and codon sequences match."""
+        ntseqs = {}
+        aaseqs = {}
+        seqname_id = {}
+        for seqid in seqids:
+            sql = "select sequence from ntseqs where seqid=" + seqid.__str__()
+            cur.execute(sql)
+            ntsequence = cur.fetchone()[0]
+            sql = "select sequence from aaseqs where seqid=" + seqid.__str__()
+            cur.execute(sql)
+            aasequence = cur.fetchone()[0]
+            name = get_seqname(con, seqid)
+            seqname_id[name] = seqid
+            ntseqs[name] = ntsequence
+            aaseqs[name] = aasequence
+            
+        bad_taxa = []
+        for taxon in aaseqs:
+            check = check_nt_vs_aa(con, aaseqs[taxon], ntseqs[taxon])
+            if check == False:
+                bad_taxa.append( taxon )
+                write_log(con, "Removing taxon " + taxon + " from wgd_group " + orthogroupid.__str__() + ". Checkping 824.")
+        
+        for bt in bad_taxa:
+            aaseqs.pop(bt)
+            ntseqs.pop(bt)
+            sql = "delete from nt_aa_check where seqid=" + seqname_id[bt].__str__()
+            cur.execute(sql)
+        con.commit()
+        
+        countgroups += 1
+        if countgroups%10 == 0:  
+            sys.stdout.write("\r    --> %.1f%%"% (100*countgroups/float(totalgroups)) )
+            sys.stdout.flush()
+            
+        
+        
+        
+        
