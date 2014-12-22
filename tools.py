@@ -1,6 +1,7 @@
-import re
+import os, re
 import sqlite3 as lite
 from fogasrdb_api import *
+from plotutils import *
 
 def read_fastalines(lines):
     """Returns a hash: key = taxon name, value = sequence from the fasta file.
@@ -728,7 +729,7 @@ def write_asr_scripts(con):
     commands = []
 
     #for ii in x:
-    write_log(con, "Restricting the analysis to the first 100 orthogroups only. Checkpoint 663.")    
+    write_log(con, "Restricting the analysis to the first 30 orthogroups only. Checkpoint 663.")    
     for cc in range(0, 30):
         ii = x[cc] 
 
@@ -737,9 +738,7 @@ def write_asr_scripts(con):
 
         if os.path.exists(datadir):              
             fout = open(scriptpath, "w")
-            fout.write("cd " + os.path.abspath(datadir) + "\n" )
             fout.write("python ~/EclipseWork/asrpipelinev2/runme.py --configpath " + ii[0].__str__()  + ".config --skip_zorro\n")
-            fout.write("cd -")
             fout.close()
             commands.append("source " + datadir + "/runme.sh")
         else:
@@ -754,9 +753,70 @@ def write_asr_scripts(con):
     for c in commands:
         fout.write(c + "\n")
     fout.close()
+
+def distribute_to_slaves(con):
+    cur = con.cursor()
     
+    datadir_slave = {}
     
+    slaves = ["agassiz", "bago", "darwin", "ericsson"]
     
+    sql = "select groupid from wgd_groups"
+    cur.execute(sql)
+    x = cur.fetchall()
+    commands = []
+    write_log(con, "Restricting the analysis to the first 100 orthogroups only. Checkpoint 663.")    
+    count_slave = -1
+    for cc in range(0, 30):
+        ii = x[cc] 
+
+        datadir = "data/" + ii[0].__str__()
+        scriptpath = datadir + "/runme.sh"
+        
+        """Copy the working folder to the slave node's tmp folder"""
+        if os.path.exists(scriptpath):
+            count_slave += 1
+            datadir_slave[ ii[0].__str__() ] = count_slave%(slaves.__len__())
+            c = "scp -r " + datadir + " " + slaves[ count_slave%(slaves.__len__()) ] + ":/tmp/"
+            print c
+            os.system(c)
+    
+    for ii in range(0, slaves.__len__()):
+        fout = open("run." + slaves[ii] + ".sh", "w")
+        for d in datadir_slave:
+            if datadir_slave[d] == ii:
+                fout.write("cd /tmp/" + d + "\n")
+                fout.write("source runme.sh\n")
+                fout.write("cd -\n")
+        fout.close()
+        
+        os.system("scp " + "run." + slaves[ii] + ".sh " + slaves[ii] + ":/tmp/runme.sh")
+
+def launch_remote_slaves(con):
+    slaves = ["agassiz", "bago", "darwin", "ericsson"]
+    
+    fout = open("hosts.txt", "w")
+    fout.write("localhost slots=1\n")
+    for s in slaves:
+        fout.write(s + " slots=1\n")
+    fout.close()
+    
+    fout = open("asr_commands.sh", "w")
+    for s in slaves:
+        fout.write("source /tmp/runme.sh\n")
+    fout.close()    
+
+    c = "mpirun -np 5 --machinefile hosts.txt /common/bin/mpi_dispatch asr_commands.sh"
+    print c
+    os.system(c)
+ 
+def collect_from_slaves(con):
+    slaves = ["agassiz", "bago", "darwin", "ericsson"]
+    
+    for s in slaves:
+        c = "scp -r " + s + ":/tmp/* ./data/"
+        os.system( c )
+ 
 def validate_asr_output(con):
     cur = con.cursor()
     sql = "select groupid from wgd_groups"
@@ -782,6 +842,63 @@ def validate_asr_output(con):
                     count += 1
             fin.close()
             print "\n. . . " + count.__str__() + " sites."
+
+def read_all_dnds_df_comparisons(con):
+    cur = con.cursor()
+    sql = "select groupid from wgd_groups"
+    cur.execute(sql)
+    x = cur.fetchall()
+    
+    cat1points = []
+    negcat1points = []
+    cat2points = []
+    cat3points = []
+    cat23points = []
+    dfpoints = []
+    kpoints = []
+    ppoints = []
+    
+    """ NOTE: we're restricting the analysis to the first 100 orthogroups only."""
+    for cc in range(0, 30):
+        ii = x[cc]  
+        datadir = "data/" + ii[0].__str__()
+        
+        """Look for the dN/dS vs. Df comparison"""
+        comppath = datadir + "/compare_dnds_Df.txt"
+        
+        if os.path.exists(comppath):
+            print ". Reading " + comppath
+            fin = open( comppath, "r" )
+            for l in fin.xreadlines():
+                if l.__len__() > 5:
+                    tokens = l.split()
+                    site = int( tokens[0] )
+                    cat1 = float( tokens[1] )
+                    cat2 = float( tokens[2] )
+                    cat3 = float( tokens[3] )
+                    df = abs(  float( tokens[4] )  )
+                    k = float( tokens[5] )
+                    p = float( tokens[6] )
+                    
+                    cat1points.append( cat1 )
+                    negcat1points.append( 1.0 - cat1 )
+                    cat2points.append( cat2 )
+                    cat3points.append( cat3 )
+                    cat23points.append( max(cat2,cat3) )
+                    dfpoints.append(df)
+                    kpoints.append(k)
+                    ppoints.append(p)
+            fin.close()
+    
+    #scatter1(cat23points, dfpoints, xlab="Probability of Positive Selection", ylab="Df")
+    
+    scatter_nxm(2, 2, [cat23points, dfpoints], ["P(w>1)", "Df"], "compare_cat23_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+    scatter_nxm(2, 2, [cat3points, dfpoints], ["P(cat3)", "Df"], "compare_cat3_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+    scatter_nxm(2, 2, [cat2points, dfpoints], ["P(cat2)", "Df"], "compare_cat2_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+    scatter_nxm(2, 2, [negcat1points, dfpoints], ["1-P(cat1)", "Df"], "compare_neg1_df", title="dN/dS versus dF", xlab="1.0 - Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+                                  
+        
+                
 
 def check_again_wgdgroups(con):
     cur = con.cursor()

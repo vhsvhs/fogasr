@@ -8,13 +8,14 @@ cur = con.cursor()
 #verify_sequences(con)
 #import_orthogroups(con)
 #filter_orthogroups(con)
-
 #check_again_wgdgroups(con)
-
 #setup_all_asr(con)
 #write_asr_scripts(con)
+#distribute_to_slaves(con)
+#launch_remote_slaves(con)
 
-#import os
-#os.system("mpirun -np 3 /common/bin/mpi_dispatch asr_commands.sh")
+#collect_from_slaves(con)
 
 validate_asr_output(con)
+
+read_all_dnds_df_comparisons(con)
