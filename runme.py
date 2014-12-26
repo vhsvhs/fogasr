@@ -11,11 +11,9 @@ cur = con.cursor()
 #check_again_wgdgroups(con)
 #setup_all_asr(con)
 #write_asr_scripts(con)
-#distribute_to_slaves(con)
+distribute_to_slaves(con)
+
 #launch_remote_slaves(con)
-
 #collect_from_slaves(con)
-
-validate_asr_output(con)
-
-read_all_dnds_df_comparisons(con)
+#validate_asr_output(con)
+#read_all_dnds_df_comparisons(con)

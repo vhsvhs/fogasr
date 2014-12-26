@@ -482,8 +482,8 @@ def setup_all_asr(con):
     x = cur.fetchall()
     os.system("mkdir data")
     #for ii in x:
-    write_log(con, "Restricting the analysis to the first 30 orthogroups only. Checkpoint 486.")    
-    for cc in range(0, 30):
+    #write_log(con, "Restricting the analysis to the first 30 orthogroups only. Checkpoint 486.")    
+    for cc in range(0, x.__len__()):
         ii = x[cc] 
         print "\n. Building ASR working folder for " + ii[0].__str__()
         setup_asr_analysis(con, ii[0])
@@ -729,8 +729,8 @@ def write_asr_scripts(con):
     commands = []
 
     #for ii in x:
-    write_log(con, "Restricting the analysis to the first 30 orthogroups only. Checkpoint 663.")    
-    for cc in range(0, 30):
+    #write_log(con, "Restricting the analysis to the first 30 orthogroups only. Checkpoint 663.")    
+    for cc in range(0, x.__len__()):
         ii = x[cc] 
 
         datadir = "data/" + ii[0].__str__()
@@ -765,14 +765,14 @@ def distribute_to_slaves(con):
     cur.execute(sql)
     x = cur.fetchall()
     commands = []
-    write_log(con, "Restricting the analysis to the first 100 orthogroups only. Checkpoint 663.")    
+    #write_log(con, "Restricting the analysis to the first 100 orthogroups only. Checkpoint 663.")    
     count_slave = -1
-    for cc in range(0, 30):
+    for cc in range(0, x.__len__()):
         ii = x[cc] 
-
+ 
         datadir = "data/" + ii[0].__str__()
         scriptpath = datadir + "/runme.sh"
-        
+         
         """Copy the working folder to the slave node's tmp folder"""
         if os.path.exists(scriptpath):
             count_slave += 1
@@ -786,7 +786,10 @@ def distribute_to_slaves(con):
         for d in datadir_slave:
             if datadir_slave[d] == ii:
                 fout.write("cd /tmp/" + d + "\n")
+                """Run the ASR pipeline for this gene:"""
                 fout.write("source runme.sh\n")
+                """Each slave sends its data back to the master:"""
+                fout.write("scp -r ../" + d + " 10.0.0.100:/Volumes/RAID/victor/fogasr/data\n")
                 fout.write("cd -\n")
         fout.close()
         
@@ -823,8 +826,8 @@ def validate_asr_output(con):
     cur.execute(sql)
     x = cur.fetchall()
     
-    """ NOTE: we're restricting the analysis to the first 100 orthogroups only."""
-    for cc in range(0, 30):
+    #""" NOTE: we're restricting the analysis to the first 100 orthogroups only."""
+    for cc in range(0, x.__len__()):
         ii = x[cc]  
         datadir = "data/" + ii[0].__str__()
         
@@ -859,7 +862,7 @@ def read_all_dnds_df_comparisons(con):
     ppoints = []
     
     """ NOTE: we're restricting the analysis to the first 100 orthogroups only."""
-    for cc in range(0, 30):
+    for cc in range(0, x.__len__()):
         ii = x[cc]  
         datadir = "data/" + ii[0].__str__()
         
@@ -873,17 +876,31 @@ def read_all_dnds_df_comparisons(con):
                 if l.__len__() > 5:
                     tokens = l.split()
                     site = int( tokens[0] )
-                    cat1 = float( tokens[1] )
-                    cat2 = float( tokens[2] )
-                    cat3 = float( tokens[3] )
-                    df = abs(  float( tokens[4] )  )
-                    k = float( tokens[5] )
-                    p = float( tokens[6] )
+                    nebcat1     = float( tokens[1] )
+                    nebcat2     = float( tokens[2] )
+                    nebcat3     = float( tokens[3] )
+                    nebancmu    = int(tokens[4]) # did the ancestor mutate at this site?
+                    nebsig      = int(tokens[5])
                     
-                    cat1points.append( cat1 )
+                    bebcat1     = float(tokens[6])
+                    bebcat2     = float(tokens[7])
+                    bebcat3     = float(tokens[8])
+                    bebancmu    = int(tokens[9])
+                    bebsig      = int(tokens[10])
+                    
+                    df          = abs(  float( tokens[11]) )
+                    k           = float( tokens[12] )
+                    p           = float( tokens[13] )
+                    
+                    
+                    #
+                    # continue here
+                    #
+                    
+                    cat1points.append( bebcat1 )
                     negcat1points.append( 1.0 - cat1 )
-                    cat2points.append( cat2 )
-                    cat3points.append( cat3 )
+                    cat2points.append( bebcat2 )
+                    cat3points.append( bebcat3 )
                     cat23points.append( max(cat2,cat3) )
                     dfpoints.append(df)
                     kpoints.append(k)
@@ -892,10 +909,12 @@ def read_all_dnds_df_comparisons(con):
     
     #scatter1(cat23points, dfpoints, xlab="Probability of Positive Selection", ylab="Df")
     
-    scatter_nxm(2, 2, [cat23points, dfpoints], ["P(w>1)", "Df"], "compare_cat23_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
-    scatter_nxm(2, 2, [cat3points, dfpoints], ["P(cat3)", "Df"], "compare_cat3_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
-    scatter_nxm(2, 2, [cat2points, dfpoints], ["P(cat2)", "Df"], "compare_cat2_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
-    scatter_nxm(2, 2, [negcat1points, dfpoints], ["1-P(cat1)", "Df"], "compare_neg1_df", title="dN/dS versus dF", xlab="1.0 - Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+    scatter1("compare_test", cat23points, dfpoints, xlab="Prob. of Positive Selection", ylab="Functional Score")
+    
+#     scatter_nxm(2, 2, [cat23points, dfpoints], ["P(w>1)", "Df"], "compare_cat23_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+#     scatter_nxm(2, 2, [cat3points, dfpoints], ["P(cat3)", "Df"], "compare_cat3_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+#     scatter_nxm(2, 2, [cat2points, dfpoints], ["P(cat2)", "Df"], "compare_cat2_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
+#     scatter_nxm(2, 2, [negcat1points, dfpoints], ["1-P(cat1)", "Df"], "compare_neg1_df", title="dN/dS versus dF", xlab="1.0 - Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
                                   
         
                 
