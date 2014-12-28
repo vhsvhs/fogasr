@@ -826,7 +826,7 @@ def validate_asr_output(con):
     cur.execute(sql)
     x = cur.fetchall()
     
-    #""" NOTE: we're restricting the analysis to the first 100 orthogroups only."""
+    count_good = 0
     for cc in range(0, x.__len__()):
         ii = x[cc]  
         datadir = "data/" + ii[0].__str__()
@@ -837,6 +837,7 @@ def validate_asr_output(con):
         if False == os.path.exists(comppath):
             write_error(con, "I cannot find the dnds-vs.-df comparisons for orthogroup ID " + ii[0].__str__() )
         else:
+            count_good += 1
             write_log(con, "OK. I found the dnds-vs.-df comparisons for orthogroup ID " + ii[0].__str__() )
             fin = open(comppath, "r")
             count = 0
@@ -845,6 +846,7 @@ def validate_asr_output(con):
                     count += 1
             fin.close()
             print "\n. . . " + count.__str__() + " sites."
+    write_log(con, "I found " + count_good.__str__() + " orthogroups with data, and " + (x.__len__()-count_good).__str__() + " without data.")
 
 def read_all_dnds_df_comparisons(con):
     cur = con.cursor()
@@ -857,7 +859,15 @@ def read_all_dnds_df_comparisons(con):
     cat2points = []
     cat3points = []
     cat23points = []
+    cat23points_ancmu = []
+    cat23points_pos = []
+    cat23points_ancmupos = []
+    
     dfpoints = []
+    dfpoints_ancmu = [] # subset of points with ancestral change
+    dfpoints_pos = [] # subset of points with significant positive selection
+    dfpoints_ancmupos = [] # subset of points with both previous conditions.
+    
     kpoints = []
     ppoints = []
     
@@ -875,41 +885,55 @@ def read_all_dnds_df_comparisons(con):
             for l in fin.xreadlines():
                 if l.__len__() > 5:
                     tokens = l.split()
-                    site = int( tokens[0] )
-                    nebcat1     = float( tokens[1] )
-                    nebcat2     = float( tokens[2] )
-                    nebcat3     = float( tokens[3] )
-                    nebancmu    = int(tokens[4]) # did the ancestor mutate at this site?
-                    nebsig      = int(tokens[5])
-                    
-                    bebcat1     = float(tokens[6])
-                    bebcat2     = float(tokens[7])
-                    bebcat3     = float(tokens[8])
-                    bebancmu    = int(tokens[9])
-                    bebsig      = int(tokens[10])
-                    
-                    df          = abs(  float( tokens[11]) )
-                    k           = float( tokens[12] )
-                    p           = float( tokens[13] )
-                    
-                    
-                    #
-                    # continue here
-                    #
-                    
-                    cat1points.append( bebcat1 )
-                    negcat1points.append( 1.0 - cat1 )
-                    cat2points.append( bebcat2 )
-                    cat3points.append( bebcat3 )
-                    cat23points.append( max(cat2,cat3) )
-                    dfpoints.append(df)
-                    kpoints.append(k)
-                    ppoints.append(p)
+                    if tokens.__len__() >= 14:
+                        site = int( tokens[0] )
+                        nebcat1     = float( tokens[1] )
+                        nebcat2     = float( tokens[2] )
+                        nebcat3     = float( tokens[3] )
+                        nebancmu    = int(tokens[4]) # did the ancestor mutate at this site?
+                        nebsig      = int(tokens[5])
+                        
+                        bebcat1     = float(tokens[6])
+                        bebcat2     = float(tokens[7])
+                        bebcat3     = float(tokens[8])
+                        bebancmu    = int(tokens[9])
+                        bebsig      = int(tokens[10])
+                        
+                        df          = abs(  float( tokens[11]) )
+                        k           = float( tokens[12] )
+                        p           = float( tokens[13] )
+                        
+                        """Restrict the analysis to orthogroups in which BEB was used."""
+                        if bebcat1 > 0.0 or bebcat2 > 0.0 or bebcat3 > 0.0:
+                            if bebsig > 0 and bebancmu > 0:
+                                dfpoints_ancmupos.append( df )
+                                cat23points_ancmupos.append( max(bebcat2,bebcat3) )
+                            elif bebsig > 0:
+                                dfpoints_pos.append( df )
+                                cat23points_pos.append( max(bebcat2,bebcat3) )
+                            elif bebancmu > 0:
+                                dfpoints_ancmu.append( df )
+                                cat23points_ancmu.append( max(bebcat2,bebcat3) )
+                            else:
+                                cat1points.append( bebcat1 )
+                                negcat1points.append( 1.0 - bebcat1 )
+                                cat2points.append( bebcat2 )
+                                cat3points.append( bebcat3 )
+                                cat23points.append( max(bebcat2,bebcat3) )
+                                dfpoints.append(df)
+                                kpoints.append(k)
+                                ppoints.append(p)
             fin.close()
     
     #scatter1(cat23points, dfpoints, xlab="Probability of Positive Selection", ylab="Df")
     
-    scatter1("compare_test", cat23points, dfpoints, xlab="Prob. of Positive Selection", ylab="Functional Score")
+    if dfpoints.__len__() > 0:
+        xsets = [cat23points, cat23points_pos, cat23points_ancmu, cat23points_ancmupos]
+        ysets = [dfpoints,dfpoints_pos, dfpoints_ancmu,dfpoints_ancmupos]
+        scatter1("compare_test", xsets, ysets, xlab="Prob. of Positive Selection", ylab="Functional Score")
+        scatter1("compare_test2_zoom", xsets, ysets, xmin=0.8, logx=False, xlab="Prob. of Positive Selection", ylab="Functional Score")
+    else:
+        write_error(con, "I didn't find any data; skipping the scatterplot.")
     
 #     scatter_nxm(2, 2, [cat23points, dfpoints], ["P(w>1)", "Df"], "compare_cat23_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
 #     scatter_nxm(2, 2, [cat3points, dfpoints], ["P(cat3)", "Df"], "compare_cat3_df", title="dN/dS versus dF", xlab="Probability of Positive Selection", ylab="dF Score", force_square=False, plot_as_rank = [], skip_identity = False, skip_zeros = False)
