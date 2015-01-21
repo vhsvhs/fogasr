@@ -864,6 +864,7 @@ def read_all_dnds_df_comparisons(con):
     cat23points_ancmupos = []
     
     dfpoints = []
+    dfranks = []
     dfpoints_ancmu = [] # subset of points with ancestral change
     dfpoints_pos = [] # subset of points with significant positive selection
     dfpoints_ancmupos = [] # subset of points with both previous conditions.
@@ -871,16 +872,55 @@ def read_all_dnds_df_comparisons(con):
     kpoints = []
     ppoints = []
     
+    fout = open("outlier_sites.txt", "w")
+    
     """ NOTE: we're restricting the analysis to the first 100 orthogroups only."""
-    for cc in range(0, x.__len__()):
-        ii = x[cc]  
+    count_good = 0
+    for ii in x:
         datadir = "data/" + ii[0].__str__()
         
         """Look for the dN/dS vs. Df comparison"""
         comppath = datadir + "/compare_dnds_Df.txt"
         
         if os.path.exists(comppath):
+            count_good += 1
             print ". Reading " + comppath
+            
+            """FIrst pass - rank df, k, and p"""
+            df_sites = []
+            p_sites = []
+            k_sites = []
+            fin = open(comppath, "r")
+            for l in fin.xreadlines():
+                if l.__len__() < 5:
+                    continue
+                tokens = l.split()
+                if tokens.__len__() < 14:
+                    continue
+                site = int( tokens[0] )
+                df          = abs(  float( tokens[11]) )
+                k           = float( tokens[12] )
+                p           = float( tokens[13] )
+                
+                df_sites.append( (df,site)  )
+                k_sites.append(  (k,site)   )
+                p_sites.append(  (p,site)   )
+
+            df_ranked = sorted(df_sites, reverse=True)
+            k_ranked = sorted(k_sites, reverse=True)
+            p_ranked = sorted(p_sites, reverse=True)
+            
+            df_site_rank = {}
+            k_site_rank = {}
+            p_site_rank = {}
+            
+            for index, tuple in enumerate(df_ranked):
+                df_site_rank[ tuple[1] ] = index
+            for index, tuple in enumerate(k_ranked):
+                k_site_rank[ tuple[1] ] = index
+            for index, tuple in enumerate(p_ranked):
+                p_site_rank[ tuple[1] ] = index
+            
             fin = open( comppath, "r" )
             for l in fin.xreadlines():
                 if l.__len__() > 5:
@@ -897,7 +937,10 @@ def read_all_dnds_df_comparisons(con):
                         bebcat2     = float(tokens[7])
                         bebcat3     = float(tokens[8])
                         bebancmu    = int(tokens[9])
-                        bebsig      = int(tokens[10])
+                        if bebancmu < 1:
+                            continue
+                        
+                        bebsig      = int(tokens[10]) # there is significant evidence of positive selection
                         
                         df          = abs(  float( tokens[11]) )
                         k           = float( tokens[12] )
@@ -905,33 +948,159 @@ def read_all_dnds_df_comparisons(con):
                         
                         """Restrict the analysis to orthogroups in which BEB was used."""
                         if bebcat1 > 0.0 or bebcat2 > 0.0 or bebcat3 > 0.0:
-                            if bebsig > 0 and bebancmu > 0:
-                                dfpoints_ancmupos.append( df )
-                                cat23points_ancmupos.append( max(bebcat2,bebcat3) )
-                            elif bebsig > 0:
-                                dfpoints_pos.append( df )
-                                cat23points_pos.append( max(bebcat2,bebcat3) )
-                            elif bebancmu > 0:
-                                dfpoints_ancmu.append( df )
-                                cat23points_ancmu.append( max(bebcat2,bebcat3) )
-                            else:
-                                cat1points.append( bebcat1 )
-                                negcat1points.append( 1.0 - bebcat1 )
-                                cat2points.append( bebcat2 )
-                                cat3points.append( bebcat3 )
-                                cat23points.append( max(bebcat2,bebcat3) )
-                                dfpoints.append(df)
-                                kpoints.append(k)
-                                ppoints.append(p)
+                            #if bebsig > 0 and bebancmu > 0:
+                            #    dfpoints_ancmupos.append( df )
+                            #    cat23points_ancmupos.append( max(bebcat2,bebcat3) )
+                            #elif bebsig > 0:
+                            #    dfpoints_pos.append( df )
+                            #    cat23points_pos.append( max(bebcat2,bebcat3) )
+#                             elif bebancmu > 0:
+#                                 dfpoints_ancmu.append( df )
+#                                 cat23points_ancmu.append( max(bebcat2,bebcat3) )
+                            #else:
+                            cat1points.append( bebcat1 )
+                            negcat1points.append( 1.0 - bebcat1 )
+                            cat2points.append( bebcat2 )
+                            cat3points.append( bebcat3 )
+                            cat23points.append( max(bebcat2,bebcat3) )
+                            dfpoints.append(df)
+                            dfrank = df_site_rank[site]
+                            dfranks.append( dfrank )
+                            kpoints.append(k)
+                            ppoints.append(p)
+                            
+                            
+                            is_outlier = 0
+                            """Is this site an interesting outlier?"""
+                            if df < 20.0 and bebsig > 0:
+                                is_outlier = 1
+
+                            if df < 20.0 and bebsig > 0:
+                                is_outlier = 1
+                                
+                            if is_outlier > 0:
+                                dbpath = "data/" + ii[0].__str__() + "/asr.db"
+                                if False == os.path.exists(dbpath):
+                                    write_error(con, "I cannot find the SQL database at " + dbpath)
+                                    continue
+                            
+                                asrcon = lite.connect(dbpath)
+                                asrcur = asrcon.cursor()
+                                
+                                print " * Special Case Type", is_outlier, "in", dbpath
+                                
+                                fout.write("===============================================================\n")
+                                fout.write("comppath: " + comppath + "\n")
+                                fout.write("line: " + l + "\n")
+                                fout.write("site:" + site.__str__() + "\n")
+                                
+                                sql = "select id from DNDS_Models where name='Nsites_branch'"
+                                asrcur.execute(sql)
+                                zz = asrcur.fetchall()
+                                if zz.__len__() == 0:
+                                    write_log(con, "There are no DNDS_Models in the database, so I'm skipping the comparison of DNDS to Df.")
+                                    return
+                                nsites_id = zz[0][0]
+                                
+                                """Get the ancestral PP values for this site."""
+                                sql = "select testid from FScore_Sites where site=" + site.__str__() + " and df=" + df.__str__()
+                                asrcur.execute(sql)
+                                zz = asrcur.fetchall()
+                                testid = zz[0][0]
+                                #print " \t Fscore testid=" + testid.__str__()
+                                sql = "select almethod, phylomodel, ancid1, ancid2 from FScore_Tests where id=" + testid.__str__()
+                                asrcur.execute(sql)
+                                x = asrcur.fetchall()
+                                almethod = x[0][0]
+                                phylomodel = x[0][1]
+                                ancid1 = x[0][2]
+                                ancid2 = x[0][3]
+                                sql = "select state, pp from AncestralStates where ancid=" + ancid1.__str__() + " and site=" + site.__str__()
+                                asrcur.execute(sql)
+                                aaa = asrcur.fetchall()
+                                sql = "select state, pp from AncestralStates where ancid=" + ancid2.__str__() + " and site=" + site.__str__()
+                                asrcur.execute(sql)
+                                bbb = asrcur.fetchall()
+                                print "\t Ancestor 1:" + aaa.__str__()
+                                print "\t Ancestor 2:" + bbb.__str__()
+                                
+                                """Get some summary of the codon variation at this site."""
+                                sql = "select id from DNDS_Tests where almethod=" + almethod.__str__()
+                                sql += " and phylomodel=" + phylomodel.__str__() 
+                                sql += " and anc1=" + ancid1.__str__() 
+                                sql += " and anc2=" + ancid2.__str__()
+                                sql += " and dnds_model=" + nsites_id.__str__()
+                                asrcur.execute(sql)
+                                testid = asrcur.fetchone()[0]
+                                sql = "select * from DNDS_params where testid=" + testid.__str__()
+                                asrcur.execute(sql)
+                                x = asrcur.fetchall()
+                                print "\t DNDS:", x[0][1:]
+                                sql = "select * from NEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
+                                asrcur.execute(sql)
+                                x = asrcur.fetchall()
+                                nebppcat1 = x[0][2]
+                                nebppcat2 = x[0][3]
+                                nebppcat3 = x[0][4]
+                                nebppcat4 = x[0][5]
+                                nebsignificant = x[0][7]
+                                print "\t NEB probabilities:", nebppcat1, nebppcat2, nebppcat3, nebppcat4, " -- sig:", nebsignificant
+                                sql = "select * from BEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
+                                asrcur.execute(sql)
+                                x = asrcur.fetchall()
+                                bebppcat1 = x[0][2]
+                                bebppcat2 = x[0][3]
+                                bebppcat3 = x[0][4]
+                                bebppcat4 = x[0][5]
+                                bebsignificant = x[0][7]
+                                print "\t BEB probabilities:", bebppcat1, bebppcat2, bebppcat3, bebppcat4, " -- sig:", bebsignificant
+
+                                sql = "select taxonid, alsequence from AlignedSequences where almethod=" + almethod.__str__() + " and datatype=1"
+                                asrcur.execute(sql)
+                                x = asrcur.fetchall()
+                                
+                                taxon_aa = {}
+                                taxon_codon = {}
+                                for ii in x:
+                                    aachar = ii[1][site-1]
+                                    sql = "select shortname from Taxa where id=" + ii[0].__str__()
+                                    asrcur.execute(sql)
+                                    taxonname = asrcur.fetchone()[0]
+                                    taxon_aa[taxonname] = aachar
+                                
+                                sql = "select taxonid, alsequence from AlignedSequences where almethod=" + almethod.__str__() + " and datatype=0"
+                                asrcur.execute(sql)
+                                x = asrcur.fetchall()
+                                for ii in x:
+                                    codon = ii[1][ (site-1)*3:((site-1)*3)+3 ]
+                                    sql = "select shortname from Taxa where id=" + ii[0].__str__()
+                                    asrcur.execute(sql)
+                                    taxonname = asrcur.fetchone()[0]
+                                    asrcur.execute(sql)
+                                    taxon_codon[taxonname] = codon                                
+                                #print "1079: taxon_aa:", taxon_aa
+                                #print "1080: taxon_codon", taxon_codon
+                                
+                                for taxonname in taxon_aa:
+                                    if taxonname not in taxon_aa:
+                                        "\t\t", taxonname, " has no a.a."
+                                    elif taxonname not in taxon_codon:
+                                        "\t\t", taxonname, " has no codon"
+                                    else:
+                                        print taxon_aa[ taxonname ], taxon_codon[ taxonname ], taxonname                                
             fin.close()
+    
+    print "\n. I found " + count_good.__str__() + " good orthogroups."
     
     #scatter1(cat23points, dfpoints, xlab="Probability of Positive Selection", ylab="Df")
     
     if dfpoints.__len__() > 0:
-        xsets = [cat23points, cat23points_pos, cat23points_ancmu, cat23points_ancmupos]
-        ysets = [dfpoints,dfpoints_pos, dfpoints_ancmu,dfpoints_ancmupos]
-        scatter1("compare_test", xsets, ysets, xlab="Prob. of Positive Selection", ylab="Functional Score")
-        scatter1("compare_test2_zoom", xsets, ysets, xmin=0.8, logx=False, xlab="Prob. of Positive Selection", ylab="Functional Score")
+        #xsets = [cat23points, cat23points_pos, cat23points_ancmu, cat23points_ancmupos]
+        #ysets = [dfpoints,dfpoints_pos, dfpoints_ancmu,dfpoints_ancmupos]
+        xsets = [cat23points, cat23points_pos, cat23points_ancmupos]
+        ysets = [dfranks,dfpoints_pos,dfpoints_ancmupos]
+        scatter1("compare_test", xsets, ysets, xlab="Prob. of Positive Selection", ymin=0, ylab="Functional Score", format="jpeg")
+        scatter1("compare_test2_zoom", xsets, ysets, xmin=0.8, logx=False, ymin=0, xlab="Prob. of Positive Selection", ylab="Functional Score", format="jpeg")
     else:
         write_error(con, "I didn't find any data; skipping the scatterplot.")
     
