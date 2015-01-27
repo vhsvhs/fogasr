@@ -744,8 +744,9 @@ def write_asr_scripts(con, skip_existing=True, return_ip=None, return_folder=Non
             fout = open(scriptpath, "w")
             
             """If the  dnds-df comparison file already exists, then skip."""
+            fout.write("import os, time\n")
+            fout.write("os.chdir(\"/tmp/data/" + groupid.__str__() + "\")\n")
             if skip_existing:
-                fout.write("import os, time\n")
                 fout.write("comppath='/tmp/data/" + groupid.__str__() + "/compare_dnds_Df.txt'\n")
                 fout.write("if False == os.path.exists(comppath):\n")
                 fout.write("\t")
@@ -784,9 +785,9 @@ def distribute_to_slaves(con, practice_mode=False, skip_tarsend=False):
             for slave in slaves:
                 os.system("scp data.tar " + slave + ":/tmp/")
         
-        """Unpack the tar"""     
-        for slave in slaves:
-            os.system("ssh " + slave + " tar xvf /tmp/data.tar -C /tmp/")
+            """Unpack the tar"""     
+            for slave in slaves:
+                os.system("ssh " + slave + " tar xvf /tmp/data.tar -C /tmp/")
         
         """Send the runme.py scripts"""
         for slave in slaves:
@@ -794,7 +795,7 @@ def distribute_to_slaves(con, practice_mode=False, skip_tarsend=False):
             cur.execute(sql)
             x = cur.fetchall()
             for cc in range(0, x.__len__()):
-                groupid = cc[0]
+                groupid = x[cc][0]
                 os.system("scp data/" + groupid.__str__() + "/runme.py " + slave + ":/tmp/data/" + groupid.__str__() + "/")
         
     fout = open("hosts.txt", "w")
