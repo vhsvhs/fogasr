@@ -475,20 +475,18 @@ def filter_orthogroups(con):
     write_log(con, "I found " + count.__str__() + " orthogroups that are useful for studying the whole-genome duplication.")
 
 
-
-def setup_all_asr(con):
+def setup_all_asr(con, new_runmes_only=False):
     cur = con.cursor()
     sql = "select groupid from wgd_groups"
     cur.execute(sql)
     x = cur.fetchall()
     os.system("mkdir data")
-    #for ii in x:
-    #write_log(con, "Restricting the analysis to the first 30 orthogroups only. Checkpoint 486.")    
-    for cc in range(0, x.__len__()):
+    for cc in range(0, x.__len__() ):
         ii = x[cc] 
         print "\n. Building ASR working folder for " + ii[0].__str__()
-        setup_asr_analysis(con, ii[0])
-        validate_asr_setup(con, ii[0])
+        setup_asr_analysis(con, ii[0], new_runmes_only=new_runmes_only)
+        if new_runmes_only==False:
+            validate_asr_setup(con, ii[0])
 
 def get_gene_family_name(con, orthogroupid):
     cur = con.cursor()
@@ -566,8 +564,11 @@ def get_group_string(con, orthogroupid, names):
     return "[" + ",".join( items ) + "]"
 
 
-def setup_asr_analysis(con, orthogroupid):
-    """Setup a folder to do the ASR pipeline analysis for one orthogroup."""    
+def setup_asr_analysis(con, orthogroupid, new_runmes_only=False):
+    """Setup a folder to do the ASR pipeline analysis for one orthogroup.
+        new_runmes_only=True will update the *.config and runme.sh files for this orthogroup,
+        but it will not validate the sequences. This is a quick hack method for January 26, 2015."""
+        
     cur = con.cursor()
     
     """Get a list of sequence IDs that are in this orthogroup, AND which can be validated across their aa and nt sequences."""
@@ -578,104 +579,89 @@ def setup_asr_analysis(con, orthogroupid):
     for ii in x:
         seqids.append( ii[0] )
 
-    """Now check that all the amino acid and codon sequences match."""
-    ntseqs = {}
-    aaseqs = {}
-    for seqid in seqids:
-        sql = "select sequence from ntseqs where seqid=" + seqid.__str__()
-        cur.execute(sql)
-        ntsequence = cur.fetchone()[0]
-        sql = "select sequence from aaseqs where seqid=" + seqid.__str__()
-        cur.execute(sql)
-        aasequence = cur.fetchone()[0]
-        name = get_seqname(con, seqid)
-        ntseqs[name] = ntsequence
-        aaseqs[name] = aasequence
-        
-    bad_taxa = []
-    for taxon in aaseqs:
-        check = check_nt_vs_aa(con, aaseqs[taxon], ntseqs[taxon])
-        if check == False:
-            bad_taxa.append( taxon )
+    if new_runmes_only==False:
+        """Now check that all the amino acid and codon sequences match."""
+        ntseqs = {}
+        aaseqs = {}
+        for seqid in seqids:
+            sql = "select sequence from ntseqs where seqid=" + seqid.__str__()
+            cur.execute(sql)
+            ntsequence = cur.fetchone()[0]
+            sql = "select sequence from aaseqs where seqid=" + seqid.__str__()
+            cur.execute(sql)
+            aasequence = cur.fetchone()[0]
+            name = get_seqname(con, seqid)
+            ntseqs[name] = ntsequence
+            aaseqs[name] = aasequence
+            
+        bad_taxa = []
+        for taxon in aaseqs:
+            check = check_nt_vs_aa(con, aaseqs[taxon], ntseqs[taxon])
+            if check == False:
+                bad_taxa.append( taxon )
 
 
-    os.system("mkdir data/" + orthogroupid.__str__())
+        os.system("mkdir data/" + orthogroupid.__str__())
 
-    """Write nt FASTA"""
-    fout = open("data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".nt.fasta", "w")    
-    for seqid in seqids:
-        sql = "select sequence from ntseqs where seqid=" + seqid.__str__()
-        cur.execute(sql)
-        sequence = cur.fetchone()[0]
-        name = get_seqname(con, seqid)
-        fout.write(">" + name + "\n")
-        fout.write(sequence + "\n")
-    fout.close()
-
-    """Write aa FASTA"""
-    fout = open("data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".aa.fasta", "w")    
-    for seqid in seqids:
-        sql = "select sequence from aaseqs where seqid=" + seqid.__str__()
-        cur.execute(sql)
-        sequence = cur.fetchone()[0]
-        name = get_seqname(con, seqid)
-        fout.write(">" + name + "\n")
-        fout.write(sequence + "\n")
-    fout.close()   
+        """Write nt FASTA"""
+        fout = open("data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".nt.fasta", "w")    
+        for seqid in seqids:
+            sql = "select sequence from ntseqs where seqid=" + seqid.__str__()
+            cur.execute(sql)
+            sequence = cur.fetchone()[0]
+            name = get_seqname(con, seqid)
+            fout.write(">" + name + "\n")
+            fout.write(sequence + "\n")
+        fout.close()
+    
+        """Write aa FASTA"""
+        fout = open("data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".aa.fasta", "w")    
+        for seqid in seqids:
+            sql = "select sequence from aaseqs where seqid=" + seqid.__str__()
+            cur.execute(sql)
+            sequence = cur.fetchone()[0]
+            name = get_seqname(con, seqid)
+            fout.write(">" + name + "\n")
+            fout.write(sequence + "\n")
+        fout.close()   
     
     """Write ASR pipeline configuration file."""
     fout = open("data/" + orthogroupid.__str__() + "/" + orthogroupid.__str__() + ".config", "w")    
     fout.write("GENE_ID = " + orthogroupid.__str__() + "\n")
     project_name = get_gene_family_name(con, orthogroupid)
     fout.write("PROJECT_TITLE = " + project_name.__str__() + "\n")
-    
     fout.write("SEQUENCES = " + orthogroupid.__str__() + ".aa.fasta\n")
     fout.write("NTFASTA = " + orthogroupid.__str__() + ".nt.fasta\n")
-    
     fout.write("RAXML = raxml -T 2\n")
     fout.write("PHYML = phyml\n")
     fout.write("LAZARUS = python /common/REPOSITORY/lazarus/lazarus.py\n") 
     fout.write("MARKOV_MODEL_FOLDER = /common/REPOSITORY/paml44/dat\n")
     fout.write("ANCCOMP = python /Network/Servers/udp015817uds.ucsf.edu/Users/victor/Documents/EclipseWork/anccomp/compare_ancs.py\n")
-    
     fout.write("FASTTREE = FastTree\n")
-    
     fout.write("THRESHOLDS_ZORRO = 0.1 0.25 0.5 1.0\n")
-
     fout.write("USE_MPI = False\n")
-    
     # This is how the O.S. should launch shell scripts:
     fout.write("RUN = sh\n")
-    
     # In what directories should I expect to find multiple sequence alignments? 
     fout.write("ALIGNMENT_ALGORITHMS = mafft\n")
-    
     fout.write("MSAPROBS = msaprobs\n")
     fout.write("MUSCLE = muscle\n")
-    fout.write("MAFFT = mafft\n")
+    fout.write("MAFFT = /usr/local/bin/mafft\n") # important to use this full path for our cluster config. 'mafft' alone causes problems when launched via mpirun.
     fout.write("ZORRO = zorro\n")
     fout.write("CODEML = codeml\n")
-    
     fout.write("MODELS_RAXML = PROTGAMMALG PROTCATLG \n")
-    
     fout.write("SEED_MOTIF_TAXA = " + project_name + "\n")
-    
     fout.write("N_BAYES_SAMPLES = 10\n")
-    
     ogs = get_outgroup_string(con, orthogroupid)
     fout.write("OUTGROUP = " + ogs + "\n")
-    
     fout.write("ANCESTORS = AncPredup AncPostdup\n")
     ancs = get_predup_anc_string(con, orthogroupid)
     fout.write("INGROUP AncPredup " + ancs + "\n")
     ancs = get_postdup_anc_string(con, orthogroupid)
     fout.write("INGROUP AncPostdup " + ancs + "\n")
-    
     fout.write("ASRSEED AncPredup " + project_name + "\n")
     fout.write("ASRSEED AncPostdup " + project_name + "\n")
-    
     fout.write("COMPARE AncPredup AncPostdup\n")
-    
     fout.close()
    
     
@@ -733,31 +719,22 @@ def write_asr_scripts(con, skip_existing=True, return_ip=None, return_folder=Non
     x = cur.fetchall()
     commands = []
 
-    for cc in range(0, x.__len__()):
+    for cc in range(0, x.__len__() ):
         ii = x[cc] 
         groupid = ii[0]
 
-        datadir = "data/" + ii[0].__str__()
-        scriptpath = datadir + "/runme.py"
+        datadir = "data/" + groupid.__str__()
+        scriptpath = datadir + "/runme.sh"
 
         if os.path.exists(datadir):              
             fout = open(scriptpath, "w")
-            
-            """If the  dnds-df comparison file already exists, then skip."""
-            fout.write("import os, time\n")
-            fout.write("os.chdir(\"/tmp/data/" + groupid.__str__() + "\")\n")
-            if skip_existing:
-                fout.write("comppath='/tmp/data/" + groupid.__str__() + "/compare_dnds_Df.txt'\n")
-                fout.write("if False == os.path.exists(comppath):\n")
-                fout.write("\t")
-            fout.write("os.system(\"python ~/EclipseWork/asrpipelinev2/runme.py --configpath " + groupid.__str__()  + ".config --skip_zorro\")\n")
-            
-            """Return the data to the master node."""
-            if return_ip != None and return_folder != None:
-                fout.write("os.system(\"scp -r /tmp/data/" + groupid.__str__() + " " + return_ip.__str__() + ":" + return_folder + "/\")\n")
-            
+            fout.write("#!/bin/bash\n")
+            fout.write("source ~/.bash_profile\n")
+            fout.write("cd /tmp/data/" + groupid.__str__() + "\n")
+            fout.write("python ~/EclipseWork/asrpipelinev2/runme.py --configpath " + groupid.__str__()  + ".config --skip_zorro\n")
+            fout.write("scp -r /tmp/data/" + groupid.__str__() + " " + return_ip.__str__() + ":" + return_folder.__str__() + "/\n")
             fout.close()
-            commands.append("python /tmp/data/" + groupid.__str__() + "/runme.py")
+            commands.append("source /tmp/data/" + groupid.__str__() + "/runme.sh")
         else:
             write_error(con, "I cannot find the data directory for orthogroup " + groupid.__str__() + " at " + datadir)
             exit()
@@ -778,6 +755,8 @@ def distribute_to_slaves(con, practice_mode=False, skip_tarsend=False):
     datadir_slave = {}    
     slaves = ["agassiz", "bago", "darwin", "ericsson"]
 
+    scp_commands = []
+
     if practice_mode == False:
         if skip_tarsend == False:
             """Build and send the tar"""
@@ -789,19 +768,24 @@ def distribute_to_slaves(con, practice_mode=False, skip_tarsend=False):
             for slave in slaves:
                 os.system("ssh " + slave + " tar xvf /tmp/data.tar -C /tmp/")
         
-        """Send the runme.py scripts"""
+        """Send the runme.sh scripts"""
         for slave in slaves:
             sql = "select groupid from wgd_groups"
             cur.execute(sql)
             x = cur.fetchall()
             for cc in range(0, x.__len__()):
                 groupid = x[cc][0]
-                os.system("scp data/" + groupid.__str__() + "/runme.py " + slave + ":/tmp/data/" + groupid.__str__() + "/")
+                scp_commands.append("scp data/" + groupid.__str__() + "/runme.sh " + slave + ":/tmp/data/" + groupid.__str__() + "/" )
+                scp_commands.append("scp data/" + groupid.__str__() + "/" + groupid.__str__() + ".config " + slave + ":/tmp/data/" + groupid.__str__() + "/")
         
     fout = open("hosts.txt", "w")
     fout.write("localhost slots=1\n")
     for s in slaves:
         fout.write(s + " slots=2\n")
+    fout.close()
+
+    fout = open("hosts.local.txt", "w")
+    fout.write("localhost slots=5\n")
     fout.close()
     
     cur = con.cursor()
@@ -812,10 +796,16 @@ def distribute_to_slaves(con, practice_mode=False, skip_tarsend=False):
     cur.execute(sql)
     con.commit()
 
-    c = "mpirun -np 9 --machinefile hosts.txt /common/bin/mpi_dispatch asr_commands.sh"
-    print c
+    fout.write("scp_commands.sh", "w")
+    for c in scp_commands:
+        fout.write(c + "\n")
+    fout.close()
     if False == practice_mode:
-        os.system(c)
+        os.system("mpirun -np 5 --machinefile hosts.local.txt /common/bin/mpi_dispatch scp_commands.sh")
+
+
+    if False == practice_mode:
+        os.system("mpirun -np 9 --machinefile hosts.txt /common/bin/mpi_dispatch asr_commands.sh")
  
  
 def validate_asr_output(con):
