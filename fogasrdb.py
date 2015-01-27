@@ -1,4 +1,5 @@
 from fogasrdb_api import *
+from version import *
   
 def build_db(dbpath = None):
     """Initializes all the tables. Returns the DB connection object.
@@ -23,9 +24,20 @@ def build_db(dbpath = None):
     cur.execute("create table if not exists aaseqs(id INTEGER primary key autoincrement, speciesid INT, sequence TEXT, seqid INT)")
     cur.execute("create table if not exists nt_aa_check(seqid INTEGER, checkval INT)") # do the nt and aa sequences correspond? If so, then check == 1
     cur.execute("create table if not exists orthogroups(id INTEGER primary key autoincrement, name TEXT unique)")
+    cur.execute("create table if not exists orthogroup_action_timestamp(groupid INTEGER, time FLOAT, action TEXT)") # time should be made from Python's time.time() function.
     cur.execute("create table if not exists group_seq(groupid INTEGER, seqid INTEGER)")
     cur.execute("create table if not exists wgd_groups(groupid INTEGER, depth INTEGER)") # which orthogroups are useful for stuyding the whole genome duplication?
     con.commit()
+    
+    cur.execute("delete from About")
+    con.commit()
+    cur.execute("insert into About (version) values(" + FOGASR_VERSION.__str__() + ")")
+    con.commit()
+    cur.execute("delete from Log")
+    con.commit()
+    cur.execute("delete from ErrorLog")
+    con.commit()
+    
     return con
     
 

@@ -1,6 +1,6 @@
 import sqlite3 as lite
 import urllib
-import os, sys
+import os, sys, time
 
 def write_log(con, message, code=None):
     """
@@ -32,6 +32,15 @@ def write_error(con, message, code=None):
     cur.execute(sql)
     con.commit()
     print "\n. ERROR: " + message
+    
+def insert_orthogrup_action_timestamp(con, groupid, timestamp=None, action=""):
+    cur = con.cursor()
+    sql = "insert into orthogroup_action_timestamp (groupid,time,action) "
+    if timestamp == None:
+        timestamp = time.time()
+    sql += "values(" + groupid.__str__() + "," + timestamp.__str__() + ",'" + action + "')"
+    cur.execute(sql)
+    con.commit()
     
 def get_species_name(con, speciesid):
     cur = con.cursor()
