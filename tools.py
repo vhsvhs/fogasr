@@ -796,13 +796,12 @@ def distribute_to_slaves(con, practice_mode=False, skip_tarsend=False):
     cur.execute(sql)
     con.commit()
 
-    fout.write("scp_commands.sh", "w")
+    fout = open("scp_commands.sh", "w")
     for c in scp_commands:
         fout.write(c + "\n")
     fout.close()
     if False == practice_mode:
-        os.system("mpirun -np 5 --machinefile hosts.local.txt /common/bin/mpi_dispatch scp_commands.sh")
-
+        os.system("source scp_commands.sh")
 
     if False == practice_mode:
         os.system("mpirun -np 9 --machinefile hosts.txt /common/bin/mpi_dispatch asr_commands.sh")
@@ -848,6 +847,8 @@ def read_all_dnds_df_comparisons2(con):
     cur.execute(sql)
     x = cur.fetchall()
     
+    """The following lists are just floating-point values that can be used in the scatterplot.
+        These lists include points from multiple orthogroups."""
     cat1points = []
     negcat1points = []
     cat2points = []
@@ -858,6 +859,9 @@ def read_all_dnds_df_comparisons2(con):
     dfpoints = []
     dfranks = []
     dfranks_sig = []
+    
+    dfpercentiles = []
+    dfpercentiles_sig = []
     
     kpoints = []
     ppoints = []
@@ -876,20 +880,20 @@ def read_all_dnds_df_comparisons2(con):
         comppath = datadir + "/compare_dnds_Df.txt"
                 
         if False == os.path.exists(comppath):
-            write_error(con, "The comparison file does not seem to exist, skipping: " + comppath)
+            write_log(con, "Group " + groupid.__str__() + " has no dnds/df comparison file, skipping: " + comppath)
             continue
         
         last_modified = os.path.getmtime(comppath)
-        modtime = time.ctime( last_modified )
-        if modtime.__str__().__contains__("Dec"):
-            write_log(con, "Group " + groupid.__str__() + " was last updated in December, skipping: " + comppath)
+        now = time.time()
+        if now - last_modified > 90000:
+            # skip this orthogroup
             continue
-        
+                
         insert_orthogrup_action_timestamp(con, groupid, timestamp=last_modified, action="last modified")
         
-        print ". Reading ", comppath, " (last modified: ", modtime, ")"
+        print ". Reading ", comppath
         
-        """First pass - rank df, k, and p"""
+        """FIRST PASS - rank df, k, and p"""
         df_sites = []
         p_sites = []
         k_sites = []
@@ -905,11 +909,36 @@ def read_all_dnds_df_comparisons2(con):
             k           = float( tokens[12] )
             p           = float( tokens[13] )
             bebancmu    = int(tokens[9])
+            
+            """Skip sites in which there was amino acid mutation on the focus branch."""
             if bebancmu < 1:
                 continue
             df_sites.append( (df,site)  )
             k_sites.append(  (k,site)   )
             p_sites.append(  (p,site)   )
+            
+        df_ranked = sorted(df_sites, reverse=True)
+        k_ranked = sorted(k_sites, reverse=True)
+        p_ranked = sorted(p_sites, reverse=True)
+        df_site_rank = {}
+        k_site_rank = {}
+        p_site_rank = {}
+        for index, tuple in enumerate(df_ranked):
+            df_site_rank[ tuple[1] ] = index+1
+        for index, tuple in enumerate(k_ranked):
+            k_site_rank[ tuple[1] ] = index+1
+        for index, tuple in enumerate(p_ranked):
+            p_site_rank[ tuple[1] ] = index+1
+        total_sites = df_sites.__len__()
+        
+        """site_dfpercentile: key = site, value = df percentile relative to other sites in this orthogroup."""
+        site_dfpercentile = {}
+        for index, tuple in enumerate(df_ranked):
+            site = tuple[1]
+            percentile = 1.0 - float(index) / df_ranked.__len__()
+            site_dfpercentile[site] = percentile
+                
+        
             
         """Quality check:"""
         if df_sites.__len__() == 0 or k_sites.__len__() == 0 or p_sites.__len__() == 0:
@@ -934,21 +963,6 @@ def read_all_dnds_df_comparisons2(con):
         asrcur.execute(sql)
         seedname = asrcur.fetchone()[0]
 
-        df_ranked = sorted(df_sites, reverse=True)
-        k_ranked = sorted(k_sites, reverse=True)
-        p_ranked = sorted(p_sites, reverse=True)
-        
-        df_site_rank = {}
-        k_site_rank = {}
-        p_site_rank = {}
-        
-        for index, tuple in enumerate(df_ranked):
-            df_site_rank[ tuple[1] ] = index+1
-        for index, tuple in enumerate(k_ranked):
-            k_site_rank[ tuple[1] ] = index+1
-        for index, tuple in enumerate(p_ranked):
-            p_site_rank[ tuple[1] ] = index+1
-        
         """Second pass -- deeply parse the results."""
         fin = open( comppath, "r" )
         for l in fin.xreadlines():
@@ -974,7 +988,7 @@ def read_all_dnds_df_comparisons2(con):
                 p           = float( tokens[13] )
                 
                 """Restrict the analysis to sites at which an ancestral mutation occurred."""
-                if bebancmu < 1 and nebancmu < 1:
+                if bebancmu < 1:
                     continue
                 
                 count_good_sites += 1
@@ -995,20 +1009,32 @@ def read_all_dnds_df_comparisons2(con):
                 kpoints.append(k)
                 ppoints.append(p)
                 
+                dfpercentile = site_dfpercentile[site]
+                dfpercentiles.append( dfpercentile )
+                
                 if bebsig > 0:
+                    """If the site is significant, remember the x,y values for a seperate overlay scatterplot."""
                     cat23points_sig.append( max(bebcat2,bebcat3) )
                     dfranks_sig.append( dfrank )
+                    dfpercentiles_sig.append( dfpercentile )
                 
                 is_outlier = 0
                 
                 """Is this site an interesting outlier?"""
-                if dfrank > 200  and bebsig > 0: # bebsig>0 means the site is significant
+                if dfrank == 1 and bebsig > 0:
                     is_outlier = 1
-                elif dfrank < 3 and bebsig < 1: # high-ranking df, but no BEB
-                    is_outlier = 2  
-                if dfrank < 10 and bebsig > 0:
-                    is_outlier = 3
-                
+                #if dfrank > 20  and bebsig > 0: # bebsig>0 means the site is significant
+                #     is_outlier = 1
+#                 elif dfrank < 3 and bebsig < 1: # high-ranking df, but no BEB
+#                     is_outlier = 2  
+#                 if dfrank < 10 and bebsig > 0:
+#                     is_outlier = 3
+#
+                if dfpercentile > 0.95 and bebsig < 0:
+                    is_outlier = 2
+                if dfpercentile < 0.5 and bebsig > 0:
+                    is_outlier = 4
+                    
                 if is_outlier == 0:
                     """Then we're done processing this site."""
                     continue
@@ -1018,8 +1044,9 @@ def read_all_dnds_df_comparisons2(con):
                     We'll spew its contents at the end of this loop."""
                 printline = ""
                 printline += " * Special Case Type " + is_outlier.__str__() + " in " +  dbpath + "\n"
-                printline += "\t seed taxon: " + seedname + "\n"
-                printline += "\t Df rank: " + dfrank.__str__() +  "   BEB significant: " + bebsig.__str__() + "\n"                           
+                printline += "\t Seed Taxon: " + seedname + "\n"
+                printline += "\t Site: " + site.__str__() + "\n"
+                printline += "\t Df rank: " + dfrank.__str__() + "\tDf percentile: " + dfpercentile.__str__() + "\tBEB significant: " + bebsig.__str__() + "\n"                           
                                             
                 """Get the ancestral PP values for this site."""
                 sql = "select testid from FScore_Sites where site=" + site.__str__() + " and (df=" + df.__str__() + " or df=-" + df.__str__() + ")"
@@ -1047,46 +1074,46 @@ def read_all_dnds_df_comparisons2(con):
                     printline += "\t Ancestor 2: " + bbb.__str__() + "\n"
                     printline += "\t bebancmu=" + bebancmu.__str__() + ", nebancmu=" + nebancmu.__str__() + "\n"
                 
-                if bebsig > 0:
-                    sql = "select id from DNDS_Models where name='Nsites_branch'"
-                    asrcur.execute(sql)
-                    zz = asrcur.fetchall()
-                    if zz.__len__() == 0:
-                        #write_log(con, "There are no DNDS_Models in the database, so I'm skipping the comparison of DNDS to Df.")
-                        continue
-                    nsites_id = zz[0][0]
-                    
-                    """Get some summary of the codon variation at this site."""
-                    sql = "select id from DNDS_Tests where almethod=" + almethod.__str__()
-                    sql += " and phylomodel=" + phylomodel.__str__() 
-                    sql += " and anc1=" + ancid1.__str__() 
-                    sql += " and anc2=" + ancid2.__str__()
-                    sql += " and dnds_model=" + nsites_id.__str__()
-                    asrcur.execute(sql)
-                    qq = asrcur.fetchall()
-                    testid = qq[0][0]
-                    sql = "select * from DNDS_params where testid=" + testid.__str__()
-                    asrcur.execute(sql)
-                    qq = asrcur.fetchall()
-                    printline += "\t DNDS: " + qq[0][1:].__str__() + "\n"
-                    sql = "select * from NEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
-                    asrcur.execute(sql)
-                    qq = asrcur.fetchall()
-                    nebppcat1 = qq[0][2]
-                    nebppcat2 = qq[0][3]
-                    nebppcat3 = qq[0][4]
-                    nebppcat4 = qq[0][5]
-                    nebsignificant = qq[0][7]
-                    printline += "\t NEB probabilities: " + nebppcat1.__str__() + " " + nebppcat2.__str__() + " " +  nebppcat3.__str__() + " " + nebppcat4.__str__() +  " -- sig: " + nebsignificant.__str__() + "\n"
-                    sql = "select * from BEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
-                    asrcur.execute(sql)
-                    qq = asrcur.fetchall()
-                    bebppcat1 = qq[0][2]
-                    bebppcat2 = qq[0][3]
-                    bebppcat3 = qq[0][4]
-                    bebppcat4 = qq[0][5]
-                    bebsignificant = qq[0][7]
-                    printline += "\t BEB probabilities: " + bebppcat1.__str__() + " " + bebppcat2.__str__() + " " + bebppcat3.__str__() + " " + bebppcat4.__str__() + " -- sig: " + bebsignificant.__str__() + "\n"
+                #if bebsig > 0:
+                sql = "select id from DNDS_Models where name='Nsites_branch'"
+                asrcur.execute(sql)
+                zz = asrcur.fetchall()
+                if zz.__len__() == 0:
+                    #write_log(con, "There are no DNDS_Models in the database, so I'm skipping the comparison of DNDS to Df.")
+                    continue
+                nsites_id = zz[0][0]
+                
+                """Get some summary of the codon variation at this site."""
+                sql = "select id from DNDS_Tests where almethod=" + almethod.__str__()
+                sql += " and phylomodel=" + phylomodel.__str__() 
+                sql += " and anc1=" + ancid1.__str__() 
+                sql += " and anc2=" + ancid2.__str__()
+                sql += " and dnds_model=" + nsites_id.__str__()
+                asrcur.execute(sql)
+                qq = asrcur.fetchall()
+                testid = qq[0][0]
+                sql = "select * from DNDS_params where testid=" + testid.__str__()
+                asrcur.execute(sql)
+                qq = asrcur.fetchall()
+                printline += "\t DNDS: " + qq[0][1:].__str__() + "\n"
+                sql = "select * from NEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
+                asrcur.execute(sql)
+                qq = asrcur.fetchall()
+                nebppcat1 = qq[0][2]
+                nebppcat2 = qq[0][3]
+                nebppcat3 = qq[0][4]
+                nebppcat4 = qq[0][5]
+                nebsignificant = qq[0][7]
+                printline += "\t NEB probabilities: " + nebppcat1.__str__() + " " + nebppcat2.__str__() + " " +  nebppcat3.__str__() + " " + nebppcat4.__str__() +  " -- sig: " + nebsignificant.__str__() + "\n"
+                sql = "select * from BEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
+                asrcur.execute(sql)
+                qq = asrcur.fetchall()
+                bebppcat1 = qq[0][2]
+                bebppcat2 = qq[0][3]
+                bebppcat3 = qq[0][4]
+                bebppcat4 = qq[0][5]
+                bebsignificant = qq[0][7]
+                printline += "\t BEB probabilities: " + bebppcat1.__str__() + " " + bebppcat2.__str__() + " " + bebppcat3.__str__() + " " + bebppcat4.__str__() + " -- sig: " + bebsignificant.__str__() + "\n"
         
         
                 """Get the amino acid and codon compositions at this site."""
@@ -1120,7 +1147,13 @@ def read_all_dnds_df_comparisons2(con):
                         codon_seq = Seq(codon, generic_dna)
                         translated_codon = codon_seq.transcribe().translate()
         
-                        taxon_codon[taxonname] = codon + " (" + translated_codon + ")"                             
+                        taxon_codon[taxonname] = codon                       
+                
+                taxon_species = {}
+                for taxonname in taxon_aa:
+                    sql = "select name from species where id in (select speciesid from seqnames where name='" + taxonname + "')"
+                    cur.execute(sql)
+                    taxon_species[taxonname] = cur.fetchone()[0].__str__()
                 
                 for taxonname in taxon_aa:
                     if taxonname not in taxon_aa:
@@ -1128,7 +1161,54 @@ def read_all_dnds_df_comparisons2(con):
                     elif taxonname not in taxon_codon:
                         "\t\t", taxonname, " has no codon"
                     else:
-                        printline += "\t\t" + taxon_aa[ taxonname ] + " " + taxon_codon[ taxonname ] + " " + taxonname + "\n"
+                        printline += "\t\t" + taxon_aa[ taxonname ] + " " + taxon_codon[ taxonname ] + "\t" + taxon_species[taxonname] + "\t" + taxonname + "\n"
+                
+                sql = "select newick from UnsupportedMlPhylogenies where almethod=" + almethod.__str__() + " and phylomodelid=" + phylomodel.__str__()
+                asrcur.execute(sql)
+                newick = asrcur.fetchone()[0]
+                
+                """Append species info to the newick"""
+                for taxonname in taxon_aa:
+                    try:
+                        newick = re.sub(taxonname, "'" + taxon_codon[taxonname] + " [" + taxon_aa[taxonname] + "] " + taxon_species[taxonname] + " [" + taxonname + "]'", newick)
+                    except KeyError:
+                        print "1173:", taxonname, newick
+                    #newtaxonname = re.sub("\.", "", taxonname)
+                    #newick = re.sub(taxonname, "'" + newtaxonname + "'", newick)
+                #newick = re.sub(" ", "", newick)
+                #newick = re.sub("\.", "", newick)
+                #print newick
+                
+                """Get a string tree."""
+                from cStringIO import StringIO
+                
+                # This code block is complicated way to get the print_plot to a string.
+                # 1. write the newick tree to a file
+                # 2. read that file
+                # 3. print_plot
+                # 4. capture the output from stdout into a string.
+                # 5. return things to normal
+                backup = sys.stdout
+                sys.stdout = StringIO()     # capture output
+                import dendropy
+                from dendropy import Tree
+                this_tree = Tree()
+                fnewickout = open("/tmp/" + groupid.__str__() + ".tre", "w")
+                fnewickout.write( newick + "\n")
+                fnewickout.close()
+                this_tree.read_from_path("/tmp/" + groupid.__str__() + ".tre", "newick")
+                this_tree.print_plot(plot_metric="length", display_width=100)
+                
+                #this_tr = dendropy.Tree(stream=StringIO(newick), schema="newick")
+                #this_tr.print_plot(plot_metric="length", display_width=50)
+                
+                out = sys.stdout.getvalue() # release output
+                sys.stdout.close()  # close the stream 
+                sys.stdout = backup # restore original stdout
+                
+                #print out.upper()   # post processing
+    
+                printline += "Newick: " + out + "\n"
                 
                 print printline 
                 fout.write( printline.__str__() )                             
@@ -1142,10 +1222,19 @@ def read_all_dnds_df_comparisons2(con):
     #scatter1(cat23points, dfpoints, xlab="Probability of Positive Selection", ylab="Df")
     
     if dfpoints.__len__() > 0:
+        """PLOT 1: probability of positive selection vs. Df rank."""
         xsets = [cat23points, cat23points_sig]
         ysets = [dfranks, dfranks_sig]
-        scatter1("compare_test", xsets, ysets, xlab="Probability of Positive Selection", logx=True, logy=True, ymin=0, ylab="Rank dF", format="jpeg")
-        scatter1("compare_test2_zoom", xsets, ysets, xmin=0.95, xmax=1.0, logx=False, logy=False, xlab="Prob. of Positive Selection", ylab="Rank dF", format="jpeg")
+        scatter1("scatter.logprobcat23-logdfrank", xsets, ysets, xlab="log(Probability of Positive Selection)", logx=True, logy=True, ylab="log(dF Rank)", format="jpeg")
+        scatter1("scatter.probcat23-dfrank", xsets, ysets, xlab="Probability of Positive Selection", logx=False, logy=False, ymin=0,xmin=0.0, xmax=1.0,ylab="dF Rank", format="jpeg")
+    
+        """PLOT 2: probability of positive selection vs. Df percentile."""
+        xsets =[cat23points, cat23points_sig]
+        ysets = [dfpercentiles, dfpercentiles_sig]
+        scatter1("scatter.logprobcat23-logdfpercentile", xsets, ysets, xlab="log(Probability of Positive Selection)", logx=True, logy=True, ylab="log(dF Percentile)", format="jpeg")
+        scatter1("scatter.logprobcat23-dfpercentile", xsets, ysets, xlab="log(Probability of Positive Selection)", logx=True, logy=False, ymin=0.0, ymax=1.0, ylab="dF Percentile", format="jpeg")
+        scatter1("scatter.probcat23-dfpercentile", xsets, ysets, xlab="Probability of Positive Selection", logx=False, logy=False, ymin=0, ymax=1.0,xmin=0.0, xmax=1.0, ylab="dF Percentile", format="jpeg")
+        
     else:
         write_error(con, "I didn't find any data; skipping the scatterplot.")
       
