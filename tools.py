@@ -600,7 +600,6 @@ def setup_asr_analysis(con, orthogroupid, new_runmes_only=False):
             if check == False:
                 bad_taxa.append( taxon )
 
-
         os.system("mkdir data/" + orthogroupid.__str__())
 
         """Write nt FASTA"""
@@ -630,6 +629,7 @@ def setup_asr_analysis(con, orthogroupid, new_runmes_only=False):
     fout.write("GENE_ID = " + orthogroupid.__str__() + "\n")
     project_name = get_gene_family_name(con, orthogroupid)
     fout.write("PROJECT_TITLE = " + project_name.__str__() + "\n")
+    fout.write("VERSION = Feb12.2015\n")
     fout.write("SEQUENCES = " + orthogroupid.__str__() + ".aa.fasta\n")
     fout.write("NTFASTA = " + orthogroupid.__str__() + ".nt.fasta\n")
     fout.write("RAXML = raxml -T 2\n")
@@ -749,65 +749,80 @@ def write_asr_scripts(con, skip_existing=True, return_ip=None, return_folder=Non
     fout.close()
 
 
-def distribute_to_slaves(con, practice_mode=False, skip_tarsend=False):
-    cur = con.cursor()
-    
-    datadir_slave = {}    
-    slaves = ["agassiz", "bago", "darwin", "ericsson"]
+def distribute_and_launch(con, practice_mode=False, skip_tarsend=False):
+	"""1. Distribute the configuration file and runme.sh for every orthogroup to each slave /tmp folder
+	   2. Use mpi_dispatch to launch the runme.sh scripts."""
+	cur = con.cursor()
+	datadir_slave = {}    
+	slaves = ["agassiz", "bago", "darwin", "ericsson"]
 
-    scp_commands = []
-
-    if practice_mode == False:
-        if skip_tarsend == False:
-            """Build and send the tar"""
-            os.system("tar -cvf data.tar data")
-            for slave in slaves:
-                os.system("scp data.tar " + slave + ":/tmp/")
-        
-            """Unpack the tar"""     
-            for slave in slaves:
-                os.system("ssh " + slave + " tar xvf /tmp/data.tar -C /tmp/")
-        
-        """Send the runme.sh scripts"""
-        for slave in slaves:
-            sql = "select groupid from wgd_groups"
-            cur.execute(sql)
-            x = cur.fetchall()
-            for cc in range(0, x.__len__()):
-                groupid = x[cc][0]
-                scp_commands.append("scp data/" + groupid.__str__() + "/runme.sh " + slave + ":/tmp/data/" + groupid.__str__() + "/" )
-                scp_commands.append("scp data/" + groupid.__str__() + "/" + groupid.__str__() + ".config " + slave + ":/tmp/data/" + groupid.__str__() + "/")
-        
-    fout = open("hosts.txt", "w")
-    fout.write("localhost slots=1\n")
-    for s in slaves:
-        fout.write(s + " slots=2\n")
-    fout.close()
-
-    fout = open("hosts.local.txt", "w")
-    fout.write("localhost slots=5\n")
-    fout.close()
-    
-    cur = con.cursor()
-    sql = "delete from Settings where keyword='last_launched'"
-    cur.execute(sql)
-    con.commit()
-    sql = "insert into Settings (keyword,value) values('last_launched'," + time.time().__str__() + ")"
-    cur.execute(sql)
-    con.commit()
-
-    fout = open("scp_commands.sh", "w")
-    for c in scp_commands:
-        fout.write(c + "\n")
-    fout.close()
-    if False == practice_mode:
-        os.system("source scp_commands.sh")
-
-    if False == practice_mode:
-        os.system("mpirun -np 9 --machinefile hosts.txt /common/bin/mpi_dispatch asr_commands.sh")
+	"""scp_commands is a list of shell commanes, one per orthogroup, that will launch
+		the ancestral analysis for that orthogroup."""
+	scp_commands = []
+	
+	if practice_mode == False:
+	    if skip_tarsend == False:
+	        """Build and send the tar"""
+	        os.system("tar -cvf data.tar data")
+	        for slave in slaves:
+	            os.system("scp data.tar " + slave + ":/tmp/")
+	    
+	        """Unpack the tar"""     
+	        for slave in slaves:
+	            os.system("ssh " + slave + " tar xvf /tmp/data.tar -C /tmp/")
+	    
+		"""Distribute the data"""
+		cur = con.cursor()
+		sql = "delete from Settings where keyword='last_distributed'"
+		cur.execute(sql)
+		con.commit()
+		sql = "insert into Settings (keyword,value) values('last_distributed'," + time.time().__str__() + ")"
+		cur.execute(sql)
+		con.commit()
+	    	    
+	    for slave in slaves:
+	        sql = "select groupid from wgd_groups"
+	        cur.execute(sql)
+	        x = cur.fetchall()
+	        for cc in range(0, x.__len__()):
+	            groupid = x[cc][0]
+	            scp_commands.append("scp data/" + groupid.__str__() + "/runme.sh " + slave + ":/tmp/data/" + groupid.__str__() + "/" )
+	            scp_commands.append("scp data/" + groupid.__str__() + "/" + groupid.__str__() + ".config " + slave + ":/tmp/data/" + groupid.__str__() + "/")
+	
+	"""Write a machinefile for mpirun"""
+	fout = open("hosts.txt", "w")
+	fout.write("localhost slots=1\n")
+	count_nodes = 0
+	for s in slaves:
+		count_nodes += 1
+		fout.write(s + " slots=2\n")
+	fout.close()
+	
+	fout = open("hosts.local.txt", "w")
+	fout.write("localhost slots=5\n")
+	fout.close()
+	
+	"""Write a shell script that can launch all the slaves."""
+	fout = open("scp_commands.sh", "w")
+	for c in scp_commands:
+	    fout.write(c + "\n")
+	fout.close()
+	if False == practice_mode:
+	    os.system("source scp_commands.sh")
+	
+	"""Finally. . . launch the analysis!"""
+	if False == practice_mode:
+		cur = con.cursor()
+		sql = "delete from Settings where keyword='last_launched'"
+		cur.execute(sql)
+		con.commit()
+		sql = "insert into Settings (keyword,value) values('last_launched'," + time.time().__str__() + ")"
+		cur.execute(sql)
+		con.commit()
+		os.system("mpirun -np " + (1+2*count_nodes).__str__() + " --machinefile hosts.txt /common/bin/mpi_dispatch asr_commands.sh")
  
  
-def validate_asr_output(con):
+def quickcheck_asr_output(con):
     cur = con.cursor()
     sql = "select groupid from wgd_groups"
     cur.execute(sql)
@@ -839,6 +854,7 @@ def validate_asr_output(con):
             #print "\n. . . " + count.__str__() + " sites."
     write_log(con, "I found " + count_good_groups.__str__() + " orthogroups with data, and " + (x.__len__()-count_good).__str__() + " without data.")
 
+
 def read_all_dnds_df_comparisons2(con):
     """Note: this method is very messy at the moment."""
     
@@ -863,6 +879,8 @@ def read_all_dnds_df_comparisons2(con):
     dfpercentiles = []
     dfpercentiles_sig = []
     
+    fromaa_toaa = {} # key = from AA, value = hash; key = to AA, value = count of this mutation
+    
     kpoints = []
     ppoints = []
     
@@ -875,345 +893,353 @@ def read_all_dnds_df_comparisons2(con):
     """Iterate over groups"""
     for ii in x:
         groupid = ii[0]
-        datadir = "data/" + groupid.__str__()
-        dbpath = datadir + "/asr.db"
-        comppath = datadir + "/compare_dnds_Df.txt"
-                
-        if False == os.path.exists(comppath):
-            write_log(con, "Group " + groupid.__str__() + " has no dnds/df comparison file, skipping: " + comppath)
-            continue
-        
-        last_modified = os.path.getmtime(comppath)
-        now = time.time()
-        if now - last_modified > 90000:
-            # skip this orthogroup
-            continue
-                
-        insert_orthogrup_action_timestamp(con, groupid, timestamp=last_modified, action="last modified")
-        
-        print ". Reading ", comppath
-        
-        """FIRST PASS - rank df, k, and p"""
-        df_sites = []
-        p_sites = []
-        k_sites = []
-        fin = open(comppath, "r")
-        for l in fin.xreadlines():
-            if l.__len__() < 5:
+        try:
+            datadir = "data/" + groupid.__str__()
+            dbpath = datadir + "/asr.db"
+            comppath = datadir + "/compare_dnds_Df.txt"
+                    
+            if False == os.path.exists(comppath):
+                write_log(con, "Group " + groupid.__str__() + " has no dnds/df comparison file, skipping: " + comppath)
                 continue
-            tokens = l.split()
-            if tokens.__len__() < 14:
+            
+            last_modified = os.path.getmtime(comppath)
+            now = time.time()
+            if now - last_modified > 250000:
+                print "\n. Group " + groupid.__str__() + " has a stale timestamp. Skipping."
+                # skip this orthogroup
                 continue
-            site = int( tokens[0] )
-            df          = abs(  float( tokens[11]) )
-            k           = float( tokens[12] )
-            p           = float( tokens[13] )
-            bebancmu    = int(tokens[9])
+                    
+            insert_orthogrup_action_timestamp(con, groupid, timestamp=last_modified, action="last modified")
             
-            """Skip sites in which there was amino acid mutation on the focus branch."""
-            if bebancmu < 1:
-                continue
-            df_sites.append( (df,site)  )
-            k_sites.append(  (k,site)   )
-            p_sites.append(  (p,site)   )
+            print ". Reading ", comppath
             
-        df_ranked = sorted(df_sites, reverse=True)
-        k_ranked = sorted(k_sites, reverse=True)
-        p_ranked = sorted(p_sites, reverse=True)
-        df_site_rank = {}
-        k_site_rank = {}
-        p_site_rank = {}
-        for index, tuple in enumerate(df_ranked):
-            df_site_rank[ tuple[1] ] = index+1
-        for index, tuple in enumerate(k_ranked):
-            k_site_rank[ tuple[1] ] = index+1
-        for index, tuple in enumerate(p_ranked):
-            p_site_rank[ tuple[1] ] = index+1
-        total_sites = df_sites.__len__()
-        
-        """site_dfpercentile: key = site, value = df percentile relative to other sites in this orthogroup."""
-        site_dfpercentile = {}
-        for index, tuple in enumerate(df_ranked):
-            site = tuple[1]
-            percentile = 1.0 - float(index) / df_ranked.__len__()
-            site_dfpercentile[site] = percentile
-                
-        
-            
-        """Quality check:"""
-        if df_sites.__len__() == 0 or k_sites.__len__() == 0 or p_sites.__len__() == 0:
-            write_error(con, "The comparison file seems to lack any data, skipping: " + comppath)
-            continue
-        else:
-            count_good_groups += 1
-            
-        """Open the orthogroup's SQL database, and retrieve some basic information."""
-        if False == os.path.exists(dbpath) and True == os.path.exists(comppath):
-            print "\n. What? ", dbpath, comppath
-        if False == os.path.exists(dbpath):
-            write_error(con, "I cannot find the SQL database at " + dbpath)
-            continue
-    
-        """Connect to the orthogroup's database:"""
-        asrcon = lite.connect(dbpath)
-        asrcur = asrcon.cursor()
-        print "--> SQL OK."
-                        
-        sql = "select value from Settings where keyword='seedtaxa'"
-        asrcur.execute(sql)
-        seedname = asrcur.fetchone()[0]
-
-        """Second pass -- deeply parse the results."""
-        fin = open( comppath, "r" )
-        for l in fin.xreadlines():
-            if l.__len__() > 5:
+            """FIRST PASS - retrieve and rank df, k, and p"""
+            df_sites = []
+            p_sites = []
+            k_sites = []
+            fin = open(comppath, "r")
+            for l in fin.xreadlines():
+                if l.__len__() < 5:
+                    continue
                 tokens = l.split()
                 if tokens.__len__() < 14:
                     continue
-                
-                """Parse the line with data for this site"""
                 site = int( tokens[0] )
-                nebcat1     = float( tokens[1] )
-                nebcat2     = float( tokens[2] )
-                nebcat3     = float( tokens[3] )
-                nebancmu    = int(tokens[4]) # did the ancestor mutate at this site?
-                nebsig      = int(tokens[5])
-                bebcat1     = float(tokens[6])
-                bebcat2     = float(tokens[7])
-                bebcat3     = float(tokens[8])
-                bebancmu    = int(tokens[9])
-                bebsig      = int(tokens[10]) # there is significant evidence of positive selection
                 df          = abs(  float( tokens[11]) )
                 k           = float( tokens[12] )
                 p           = float( tokens[13] )
+                bebancmu    = int(tokens[9])
                 
-                """Restrict the analysis to sites at which an ancestral mutation occurred."""
+                
+                """Skip sites in which there was amino acid mutation on the focus branch."""
                 if bebancmu < 1:
                     continue
+                df_sites.append( (df,site)  )
+                k_sites.append(  (k,site)   )
+                p_sites.append(  (p,site)   )
                 
-                count_good_sites += 1
+            df_ranked = sorted(df_sites, reverse=True)
+            k_ranked = sorted(k_sites, reverse=True)
+            p_ranked = sorted(p_sites, reverse=True)
+            df_site_rank = {}
+            k_site_rank = {}
+            p_site_rank = {}
+            for index, tuple in enumerate(df_ranked):
+                df_site_rank[ tuple[1] ] = index+1
+            for index, tuple in enumerate(k_ranked):
+                k_site_rank[ tuple[1] ] = index+1
+            for index, tuple in enumerate(p_ranked):
+                p_site_rank[ tuple[1] ] = index+1
+            total_sites = df_sites.__len__()
+            
+            """site_dfpercentile: key = site, value = df percentile relative to other sites in this orthogroup."""
+            site_dfpercentile = {}
+            for index, tuple in enumerate(df_ranked):
+                site = tuple[1]
+                percentile = 1.0 - float(index) / df_ranked.__len__()
+                site_dfpercentile[site] = percentile
+                        
+            """Quality check:"""
+            if df_sites.__len__() == 0 or k_sites.__len__() == 0 or p_sites.__len__() == 0:
+                write_error(con, "The comparison file seems to lack any data, skipping: " + comppath)
+                continue
+            else:
+                count_good_groups += 1
                 
-                """Restrict the analysis to orthogroups in which BEB was used.
-                    i.e., find at least one BEB probability that is greater than 0.0"""
-                if bebcat1 == 0.0 and bebcat2 == 0.0 and bebcat3 == 0.0:
-                    continue
-
-                cat1points.append( bebcat1 )
-                negcat1points.append( 1.0 - bebcat1 )
-                cat2points.append( bebcat2 )
-                cat3points.append( bebcat3 )
-                cat23points.append( max(bebcat2,bebcat3) )
-                dfpoints.append(df)
-                dfrank = df_site_rank[site]
-                dfranks.append( dfrank )
-                kpoints.append(k)
-                ppoints.append(p)
-                
-                dfpercentile = site_dfpercentile[site]
-                dfpercentiles.append( dfpercentile )
-                
-                if bebsig > 0:
-                    """If the site is significant, remember the x,y values for a seperate overlay scatterplot."""
-                    cat23points_sig.append( max(bebcat2,bebcat3) )
-                    dfranks_sig.append( dfrank )
-                    dfpercentiles_sig.append( dfpercentile )
-                
-                is_outlier = 0
-                
-                """Is this site an interesting outlier?"""
-                if dfrank == 1 and bebsig > 0:
-                    is_outlier = 1
-                #if dfrank > 20  and bebsig > 0: # bebsig>0 means the site is significant
-                #     is_outlier = 1
-#                 elif dfrank < 3 and bebsig < 1: # high-ranking df, but no BEB
-#                     is_outlier = 2  
-#                 if dfrank < 10 and bebsig > 0:
-#                     is_outlier = 3
-#
-                if dfpercentile > 0.95 and bebsig < 0:
-                    is_outlier = 2
-                if dfpercentile < 0.5 and bebsig > 0:
-                    is_outlier = 4
+            """Open the orthogroup's SQL database, and retrieve some basic information."""
+            if False == os.path.exists(dbpath) and True == os.path.exists(comppath):
+                print "\n. What? ", dbpath, comppath
+            if False == os.path.exists(dbpath):
+                write_error(con, "I cannot find the SQL database at " + dbpath)
+                continue
+        
+            """Connect to the orthogroup's database:"""
+            asrcon = lite.connect(dbpath)
+            asrcur = asrcon.cursor()
+            print "--> SQL OK."
+                            
+            sql = "select value from Settings where keyword='seedtaxa'"
+            asrcur.execute(sql)
+            seedname = asrcur.fetchone()[0]
+    
+            """Second pass -- deeply parse the results."""
+            fin = open( comppath, "r" )
+            for l in fin.xreadlines():
+                if l.__len__() > 5:
+                    tokens = l.split()
+                    if tokens.__len__() < 14:
+                        continue
                     
-                if is_outlier == 0:
-                    """Then we're done processing this site."""
-                    continue
-                
-                """Otherwise, analyze this outlier site.
-                    Put useful output in the variable 'printline'.  
-                    We'll spew its contents at the end of this loop."""
-                printline = ""
-                printline += " * Special Case Type " + is_outlier.__str__() + " in " +  dbpath + "\n"
-                printline += "\t Seed Taxon: " + seedname + "\n"
-                printline += "\t Site: " + site.__str__() + "\n"
-                printline += "\t Df rank: " + dfrank.__str__() + "\tDf percentile: " + dfpercentile.__str__() + "\tBEB significant: " + bebsig.__str__() + "\n"                           
-                                            
-                """Get the ancestral PP values for this site."""
-                sql = "select testid from FScore_Sites where site=" + site.__str__() + " and (df=" + df.__str__() + " or df=-" + df.__str__() + ")"
-                #print sql
-                asrcur.execute(sql)
-                zz = asrcur.fetchone()
-                if zz != None:
-                    testid = zz[0]
-                    #print " \t Fscore testid=" + testid.__str__()
-                    sql = "select almethod, phylomodel, ancid1, ancid2 from FScore_Tests where id=" + testid.__str__()
+                    """Parse the line with data for this site"""
+                    site = int( tokens[0] )
+                    nebcat1     = float( tokens[1] )
+                    nebcat2     = float( tokens[2] )
+                    nebcat3     = float( tokens[3] )
+                    nebancmu    = int(tokens[4]) # did the ancestor mutate at this site?
+                    nebsig      = int(tokens[5])
+                    bebcat1     = float(tokens[6])
+                    bebcat2     = float(tokens[7])
+                    bebcat3     = float(tokens[8])
+                    bebancmu    = int(tokens[9])
+                    bebsig      = int(tokens[10]) # there is significant evidence of positive selection
+                    df          = abs(  float( tokens[11]) )
+                    k           = float( tokens[12] )
+                    p           = float( tokens[13] )
+                    
+                    if tokens.__len__() >= 18:
+						anc1state = tokens[14]
+						anc1pp = tokens[15]
+						anc2state = tokens[16]
+						anc2pp = tokens[17]
+						
+						"""Add to the count for this mutation."""
+						if anc1state not in fromaa_toaa:
+							fromaa_toaa[anc1state] = {}
+						if anc2state not in fromaa_toaa[anc1state]:
+							fromaa_toaa[anc1state][anc2state] = 0
+						fromaa_toaa[anc1state][anc2state] += 1
+                    
+                    """Restrict the analysis to sites at which an ancestral mutation occurred."""
+                    if bebancmu < 1:
+                        continue
+                    
+                    count_good_sites += 1
+                    
+                    """Restrict the analysis to orthogroups in which BEB was used.
+                        i.e., find at least one BEB probability that is greater than 0.0"""
+                    if bebcat1 == 0.0 and bebcat2 == 0.0 and bebcat3 == 0.0:
+                        continue
+    
+                    cat1points.append( bebcat1 )
+                    negcat1points.append( 1.0 - bebcat1 )
+                    cat2points.append( bebcat2 )
+                    cat3points.append( bebcat3 )
+                    cat23points.append( max(bebcat2,bebcat3) )
+                    dfpoints.append(df)
+                    dfrank = df_site_rank[site]
+                    dfranks.append( dfrank )
+                    kpoints.append(k)
+                    ppoints.append(p)
+                    
+                    dfpercentile = site_dfpercentile[site]
+                    dfpercentiles.append( dfpercentile )
+                    
+                    if bebsig > 0:
+                        """If the site is significant, remember the x,y values for a seperate overlay scatterplot."""
+                        cat23points_sig.append( max(bebcat2,bebcat3) )
+                        dfranks_sig.append( dfrank )
+                        dfpercentiles_sig.append( dfpercentile )
+                    
+                    is_outlier = 0
+                    
+                    """Is this site an interesting outlier?"""
+                    if dfrank == 1 and bebsig > 0:
+                        is_outlier = 1
+                    elif dfpercentile > 0.95 and bebsig == 0:
+                        is_outlier = 2
+                    elif dfpercentile < 0.5 and bebsig > 0:
+                        is_outlier = 4
+                        
+                    if is_outlier == 0:
+                        """Then we're done processing this site."""
+                        continue
+                    
+                    """Otherwise, analyze this outlier site.
+                        Put useful output in the variable 'printline'.  
+                        We'll spew its contents at the end of this loop."""
+                    printline = ""
+                    printline += " * Special Case Type " + is_outlier.__str__() + " in " +  dbpath + "\n"
+                    printline += "\t Seed Taxon: " + seedname + "\n"
+                    printline += "\t Site: " + site.__str__() + "\n"
+                    printline += "\t Df rank: " + dfrank.__str__() + "\tDf percentile: " + dfpercentile.__str__() + "\tBEB significant: " + bebsig.__str__() + "\n"                           
+
+                    printline += "\t" + anc1state + " (" + anc1pp.__str__() + ")"
+                    printline += "\t" + anc2state + "(" + anc2pp.__str__() + ")"
+                    printline += "\t bebancmu=" + bebancmu.__str__() + ", nebancmu=" + nebancmu.__str__() + "\n"
+                    
+                    #if bebsig > 0:
+                    sql = "select id from DNDS_Models where name='Nsites_branch'"
+                    asrcur.execute(sql)
+                    zz = asrcur.fetchall()
+                    if zz.__len__() == 0:
+                        #write_log(con, "There are no DNDS_Models in the database, so I'm skipping the comparison of DNDS to Df.")
+                        continue
+                    nsites_id = zz[0][0]
+                    
+                    """Get some summary of the codon variation at this site."""
+                    sql = "select id from DNDS_Tests where almethod=" + almethod.__str__()
+                    sql += " and phylomodel=" + phylomodel.__str__() 
+                    sql += " and anc1=" + ancid1.__str__() 
+                    sql += " and anc2=" + ancid2.__str__()
+                    sql += " and dnds_model=" + nsites_id.__str__()
                     asrcur.execute(sql)
                     qq = asrcur.fetchall()
-                    almethod = qq[0][0]
-                    phylomodel = qq[0][1]
-                    ancid1 = qq[0][2]
-                    ancid2 = qq[0][3]
-                    sql = "select state, pp from AncestralStates where ancid=" + ancid1.__str__() + " and site=" + site.__str__()
+                    if qq.__len__() == 0:
+                        print "\n. 1088 Something is wrong:"
+                        print sql
+                        continue
+                    testid = qq[0][0]
+                    sql = "select * from DNDS_params where testid=" + testid.__str__()
                     asrcur.execute(sql)
-                    aaa = asrcur.fetchall()
-                    sql = "select state, pp from AncestralStates where ancid=" + ancid2.__str__() + " and site=" + site.__str__()
+                    qq = asrcur.fetchall()
+                    if qq.__len__() == 0:
+                        print "\n. 1096 Something is wrong:"
+                        print sql
+                        continue
+                    printline += "\t DNDS: " + qq[0][1:].__str__() + "\n"
+                    sql = "select * from NEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
                     asrcur.execute(sql)
-                    bbb = asrcur.fetchall()
-                                                        
-                    printline += "\t Ancestor 1: " + aaa.__str__() + "\n"
-                    printline += "\t Ancestor 2: " + bbb.__str__() + "\n"
-                    printline += "\t bebancmu=" + bebancmu.__str__() + ", nebancmu=" + nebancmu.__str__() + "\n"
-                
-                #if bebsig > 0:
-                sql = "select id from DNDS_Models where name='Nsites_branch'"
-                asrcur.execute(sql)
-                zz = asrcur.fetchall()
-                if zz.__len__() == 0:
-                    #write_log(con, "There are no DNDS_Models in the database, so I'm skipping the comparison of DNDS to Df.")
-                    continue
-                nsites_id = zz[0][0]
-                
-                """Get some summary of the codon variation at this site."""
-                sql = "select id from DNDS_Tests where almethod=" + almethod.__str__()
-                sql += " and phylomodel=" + phylomodel.__str__() 
-                sql += " and anc1=" + ancid1.__str__() 
-                sql += " and anc2=" + ancid2.__str__()
-                sql += " and dnds_model=" + nsites_id.__str__()
-                asrcur.execute(sql)
-                qq = asrcur.fetchall()
-                testid = qq[0][0]
-                sql = "select * from DNDS_params where testid=" + testid.__str__()
-                asrcur.execute(sql)
-                qq = asrcur.fetchall()
-                printline += "\t DNDS: " + qq[0][1:].__str__() + "\n"
-                sql = "select * from NEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
-                asrcur.execute(sql)
-                qq = asrcur.fetchall()
-                nebppcat1 = qq[0][2]
-                nebppcat2 = qq[0][3]
-                nebppcat3 = qq[0][4]
-                nebppcat4 = qq[0][5]
-                nebsignificant = qq[0][7]
-                printline += "\t NEB probabilities: " + nebppcat1.__str__() + " " + nebppcat2.__str__() + " " +  nebppcat3.__str__() + " " + nebppcat4.__str__() +  " -- sig: " + nebsignificant.__str__() + "\n"
-                sql = "select * from BEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
-                asrcur.execute(sql)
-                qq = asrcur.fetchall()
-                bebppcat1 = qq[0][2]
-                bebppcat2 = qq[0][3]
-                bebppcat3 = qq[0][4]
-                bebppcat4 = qq[0][5]
-                bebsignificant = qq[0][7]
-                printline += "\t BEB probabilities: " + bebppcat1.__str__() + " " + bebppcat2.__str__() + " " + bebppcat3.__str__() + " " + bebppcat4.__str__() + " -- sig: " + bebsignificant.__str__() + "\n"
-        
-        
-                """Get the amino acid and codon compositions at this site."""
-                taxon_aa = {}
-                taxon_codon = {}
-                
-                sql = "select taxonid, alsequence from AlignedSequences where almethod=" + almethod.__str__() + " and datatype=1"
-                asrcur.execute(sql)
-                qq = asrcur.fetchall()
-                for ss in qq:
-                    aachar = ss[1][site-1:site]
-                    sql = "select shortname from Taxa where id=" + ss[0].__str__()
+                    qq = asrcur.fetchall()
+                    nebppcat1 = qq[0][2]
+                    nebppcat2 = qq[0][3]
+                    nebppcat3 = qq[0][4]
+                    nebppcat4 = qq[0][5]
+                    nebsignificant = qq[0][7]
+                    printline += "\t NEB probabilities: " + nebppcat1.__str__() + " " + nebppcat2.__str__() + " " +  nebppcat3.__str__() + " " + nebppcat4.__str__() +  " -- sig: " + nebsignificant.__str__() + "\n"
+                    sql = "select * from BEB_scores where testid=" + testid.__str__() + " and site=" + site.__str__()
                     asrcur.execute(sql)
-                    taxonname = asrcur.fetchone()[0]
-                    taxon_aa[taxonname] = aachar
-                
-                sql = "select taxonid, alsequence from AlignedSequences where almethod=" + almethod.__str__() + " and datatype=0"
-                asrcur.execute(sql)
-                qq = asrcur.fetchall()
-                for ss in qq:                                
-                    sql = "select shortname from Taxa where id=" + ss[0].__str__()
-                    asrcur.execute(sql)
-                    taxonname = asrcur.fetchone()[0]
-        
-                    from Bio.Seq import Seq
-                    from Bio.Alphabet import generic_dna
+                    qq = asrcur.fetchall()
+                    if qq.__len__() == 0:
+                        print "\n. 1113 Something is wrong:"
+                        print sql
+                        continue
+                    bebppcat1 = qq[0][2]
+                    bebppcat2 = qq[0][3]
+                    bebppcat3 = qq[0][4]
+                    bebppcat4 = qq[0][5]
+                    bebsignificant = qq[0][7]
+                    printline += "\t BEB probabilities: " + bebppcat1.__str__() + " " + bebppcat2.__str__() + " " + bebppcat3.__str__() + " " + bebppcat4.__str__() + " -- sig: " + bebsignificant.__str__() + "\n"
+            
+                    """Get the amino acid and codon compositions at this site."""
+                    taxon_aa = {}
+                    taxon_codon = {}
                     
-                    codon = ss[1][ ((site-1)*3):(site*3) ]
-                    taxon_codon[taxonname] = codon
-                    if codon != "---":
-                        codon_seq = Seq(codon, generic_dna)
-                        translated_codon = codon_seq.transcribe().translate()
+                    sql = "select taxonid, alsequence from AlignedSequences where almethod=" + almethod.__str__() + " and datatype=1"
+                    asrcur.execute(sql)
+                    qq = asrcur.fetchall()
+                    for ss in qq:
+                        aachar = ss[1][site-1:site]
+                        sql = "select shortname from Taxa where id=" + ss[0].__str__()
+                        asrcur.execute(sql)
+                        ww = asrcur.fetchone()
+                        if ww == None:
+                            print "\n. 1138: An error occurred:"
+                            print "Group ID:", groupid.__str__()
+                            print sql
+                            continue
+                        taxonname = ww[0]
+                        taxon_aa[taxonname] = aachar
+                    
+                    sql = "select taxonid, alsequence from AlignedSequences where almethod=" + almethod.__str__() + " and datatype=0"
+                    asrcur.execute(sql)
+                    qq = asrcur.fetchall()
+                    for ss in qq:                                
+                        sql = "select shortname from Taxa where id=" + ss[0].__str__()
+                        asrcur.execute(sql)
+                        taxonname = asrcur.fetchone()[0]
+            
+                        from Bio.Seq import Seq
+                        from Bio.Alphabet import generic_dna
+                        
+                        codon = ss[1][ ((site-1)*3):(site*3) ]
+                        taxon_codon[taxonname] = codon
+                        if codon != "---":
+                            codon_seq = Seq(codon, generic_dna)
+                            translated_codon = codon_seq.transcribe().translate()
+            
+                            taxon_codon[taxonname] = codon                       
+                    
+                    taxon_species = {}
+                    for taxonname in taxon_aa:
+                        sql = "select name from species where id in (select speciesid from seqnames where name='" + taxonname + "')"
+                        cur.execute(sql)
+                        taxon_species[taxonname] = cur.fetchone()[0].__str__()
+                    
+                    """Print a mini PHYLIP alignment of the codon"""
+                    printline += "\n"
+                    printline += " " + taxon_aa.__len__().__str__() + "\t3\n"
+                    for taxonname in taxon_aa:
+                        if taxonname not in taxon_aa:
+                            "\t\t", taxonname, " has no a.a."
+                        elif taxonname not in taxon_codon:
+                            "\t\t", taxonname, " has no codon"
+                        else:
+                            printline += taxonname + "\t" + taxon_codon[ taxonname ] + " " + taxon_codon[ taxonname ] + "\n"
+                    printline += "\n"
+                    
+                    sql = "select newick from UnsupportedMlPhylogenies where almethod=" + almethod.__str__() + " and phylomodelid=" + phylomodel.__str__()
+                    asrcur.execute(sql)
+                    newick = asrcur.fetchone()[0]
+                    
+                    """Append species info to the newick"""
+                    for taxonname in taxon_aa:
+                        try:
+                            newick = re.sub(taxonname, "'" + taxon_codon[taxonname] + " [" + taxon_aa[taxonname] + "] " + taxon_species[taxonname] + " [" + taxonname + "]'", newick)
+                        except KeyError:
+                            print "1173:", taxonname, newick
+                        #newtaxonname = re.sub("\.", "", taxonname)
+                        #newick = re.sub(taxonname, "'" + newtaxonname + "'", newick)
+                    #newick = re.sub(" ", "", newick)
+                    #newick = re.sub("\.", "", newick)
+                    #print newick
+                    
+                    """Get a string tree."""
+                    from cStringIO import StringIO
+                    
+                    # This code block is complicated way to get the print_plot to a string.
+                    # 1. write the newick tree to a file
+                    # 2. read that file
+                    # 3. print_plot
+                    # 4. capture the output from stdout into a string.
+                    # 5. return things to normal
+                    backup = sys.stdout
+                    sys.stdout = StringIO()     # capture output
+                    import dendropy
+                    from dendropy import Tree
+                    this_tree = Tree()
+                    fnewickout = open("/tmp/" + groupid.__str__() + ".tre", "w")
+                    fnewickout.write( newick + "\n")
+                    fnewickout.close()
+                    this_tree.read_from_path("/tmp/" + groupid.__str__() + ".tre", "newick")
+                    this_tree.print_plot(plot_metric="length", display_width=100)
+                    
+                    #this_tr = dendropy.Tree(stream=StringIO(newick), schema="newick")
+                    #this_tr.print_plot(plot_metric="length", display_width=50)
+                    
+                    out = sys.stdout.getvalue() # release output
+                    sys.stdout.close()  # close the stream 
+                    sys.stdout = backup # restore original stdout
+                    
+                    #print out.upper()   # post processing
         
-                        taxon_codon[taxonname] = codon                       
-                
-                taxon_species = {}
-                for taxonname in taxon_aa:
-                    sql = "select name from species where id in (select speciesid from seqnames where name='" + taxonname + "')"
-                    cur.execute(sql)
-                    taxon_species[taxonname] = cur.fetchone()[0].__str__()
-                
-                for taxonname in taxon_aa:
-                    if taxonname not in taxon_aa:
-                        "\t\t", taxonname, " has no a.a."
-                    elif taxonname not in taxon_codon:
-                        "\t\t", taxonname, " has no codon"
-                    else:
-                        printline += "\t\t" + taxon_aa[ taxonname ] + " " + taxon_codon[ taxonname ] + "\t" + taxon_species[taxonname] + "\t" + taxonname + "\n"
-                
-                sql = "select newick from UnsupportedMlPhylogenies where almethod=" + almethod.__str__() + " and phylomodelid=" + phylomodel.__str__()
-                asrcur.execute(sql)
-                newick = asrcur.fetchone()[0]
-                
-                """Append species info to the newick"""
-                for taxonname in taxon_aa:
-                    try:
-                        newick = re.sub(taxonname, "'" + taxon_codon[taxonname] + " [" + taxon_aa[taxonname] + "] " + taxon_species[taxonname] + " [" + taxonname + "]'", newick)
-                    except KeyError:
-                        print "1173:", taxonname, newick
-                    #newtaxonname = re.sub("\.", "", taxonname)
-                    #newick = re.sub(taxonname, "'" + newtaxonname + "'", newick)
-                #newick = re.sub(" ", "", newick)
-                #newick = re.sub("\.", "", newick)
-                #print newick
-                
-                """Get a string tree."""
-                from cStringIO import StringIO
-                
-                # This code block is complicated way to get the print_plot to a string.
-                # 1. write the newick tree to a file
-                # 2. read that file
-                # 3. print_plot
-                # 4. capture the output from stdout into a string.
-                # 5. return things to normal
-                backup = sys.stdout
-                sys.stdout = StringIO()     # capture output
-                import dendropy
-                from dendropy import Tree
-                this_tree = Tree()
-                fnewickout = open("/tmp/" + groupid.__str__() + ".tre", "w")
-                fnewickout.write( newick + "\n")
-                fnewickout.close()
-                this_tree.read_from_path("/tmp/" + groupid.__str__() + ".tre", "newick")
-                this_tree.print_plot(plot_metric="length", display_width=100)
-                
-                #this_tr = dendropy.Tree(stream=StringIO(newick), schema="newick")
-                #this_tr.print_plot(plot_metric="length", display_width=50)
-                
-                out = sys.stdout.getvalue() # release output
-                sys.stdout.close()  # close the stream 
-                sys.stdout = backup # restore original stdout
-                
-                #print out.upper()   # post processing
+                    printline += "Newick: " + out + "\n"
+                    
+                    print printline 
+                    fout.write( printline.__str__() )                             
     
-                printline += "Newick: " + out + "\n"
-                
-                print printline 
-                fout.write( printline.__str__() )                             
-
-        fin.close()
+            fin.close()
+        except:
+            print "\n. An error occurred with group", groupid
     fout.close()
     
     print "\n. I found " + count_good_groups.__str__() + " good orthogroups."
