@@ -640,7 +640,7 @@ def setup_asr_analysis(con, orthogroupid):
     # This is how the O.S. should launch shell scripts:
     fout.write("RUN = sh\n")
     # In what directories should I expect to find multiple sequence alignments? 
-    fout.write("ALIGNMENT_ALGORITHMS = muscle msaprobs\n")
+    fout.write("ALIGNMENT_ALGORITHMS = muscle\n")
     fout.write("MSAPROBS = msaprobs\n")
     fout.write("MUSCLE = muscle\n")
     fout.write("MAFFT = /usr/local/bin/mafft\n") # important to use this full path for our cluster config. 'mafft' alone causes problems when launched via mpirun.
