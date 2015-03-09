@@ -9,7 +9,6 @@ def scatter1(filekeyword, xvalues, yvalues, xmin=None, ymin=None, xmax=None, yma
     import pylab as P
     
 
-
     """If the user didn't specify xmin and ymin, then let's
         auto-determine these values from the data."""
     if xmin == None:
@@ -42,10 +41,10 @@ def scatter1(filekeyword, xvalues, yvalues, xmin=None, ymin=None, xmax=None, yma
             ax1.scatter(xvalues[ii], yvalues[ii], color=colors[ii], edgecolors='none', s=5)
     
     """Set ticks and axes"""
-    ax1.set_xticks([xmin,xmax])
-    ax1.set_yticks([ymin,ymax])
-    ax1.set_xticklabels([xmin.__str__(), xmax.__str__()])
-    ax1.set_yticklabels([ymin.__str__(), ymax.__str__()] )
+    ax1.set_xticks([xmin,xmax-0.5*(xmax-xmin),xmax])
+    ax1.set_yticks([ymin,ymax-0.5*(ymax-ymin),ymax])
+    ax1.set_xticklabels([xmin.__str__(), (xmax-0.5*(xmax-xmin)).__str__(), xmax.__str__()])
+    ax1.set_yticklabels([ymin.__str__(), (ymax-0.5*(ymax-ymin)).__str__(), ymax.__str__()] )
     ax1.tick_params(axis='x',length=3,width=1.5)
     
     """Top histogram"""
